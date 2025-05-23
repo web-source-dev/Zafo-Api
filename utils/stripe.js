@@ -198,6 +198,114 @@ const updateSubscription = async (subscriptionId, priceId) => {
   }
 };
 
+/**
+ * Create a payment intent for ticket purchase
+ * @param {Number} amount - Amount in cents
+ * @param {String} currency - Currency code
+ * @param {String} customerId - Stripe customer ID
+ * @param {Object} metadata - Additional metadata for the payment
+ * @returns {Promise<Object>} Payment intent object
+ */
+const createTicketPaymentIntent = async (amount, currency, customerId, metadata = {}) => {
+  try {
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount,
+      currency,
+      customer: customerId,
+      metadata,
+      payment_method_types: ['card'],
+      receipt_email: metadata.email,
+      description: metadata.description || 'Event Ticket Purchase'
+    });
+    
+    return paymentIntent;
+  } catch (error) {
+    console.error('Error creating payment intent:', error);
+    throw new Error('Failed to create payment intent');
+  }
+};
+
+/**
+ * Create or retrieve a Stripe Ephemeral Key
+ * @param {String} customerId - Stripe customer ID
+ * @returns {Promise<Object>} Ephemeral key
+ */
+const createEphemeralKey = async (customerId) => {
+  try {
+    const key = await stripe.ephemeralKeys.create(
+      { customer: customerId },
+      { apiVersion: '2020-08-27' }
+    );
+    return key;
+  } catch (error) {
+    console.error('Error creating ephemeral key:', error);
+    throw new Error('Failed to create ephemeral key');
+  }
+};
+
+/**
+ * Retrieve a payment intent
+ * @param {String} paymentIntentId - Payment intent ID
+ * @returns {Promise<Object>} Payment intent
+ */
+const retrievePaymentIntent = async (paymentIntentId) => {
+  try {
+    return await stripe.paymentIntents.retrieve(paymentIntentId);
+  } catch (error) {
+    console.error('Error retrieving payment intent:', error);
+    throw new Error('Failed to retrieve payment intent');
+  }
+};
+
+/**
+ * Capture a payment intent (for manual capture)
+ * @param {String} paymentIntentId - Payment intent ID
+ * @returns {Promise<Object>} Captured payment intent
+ */
+const capturePaymentIntent = async (paymentIntentId) => {
+  try {
+    return await stripe.paymentIntents.capture(paymentIntentId);
+  } catch (error) {
+    console.error('Error capturing payment intent:', error);
+    throw new Error('Failed to capture payment intent');
+  }
+};
+
+/**
+ * Update payment intent
+ * @param {String} paymentIntentId - Payment intent ID
+ * @param {Object} updateData - Data to update
+ * @returns {Promise<Object>} Updated payment intent
+ */
+const updatePaymentIntent = async (paymentIntentId, updateData) => {
+  try {
+    return await stripe.paymentIntents.update(paymentIntentId, updateData);
+  } catch (error) {
+    console.error('Error updating payment intent:', error);
+    throw new Error('Failed to update payment intent');
+  }
+};
+
+/**
+ * Refund a payment
+ * @param {String} paymentIntentId - Payment intent ID
+ * @param {Number} amount - Amount to refund (in cents)
+ * @param {String} reason - Reason for refund
+ * @returns {Promise<Object>} Refund object
+ */
+const refundPayment = async (paymentIntentId, amount, reason = 'requested_by_customer') => {
+  try {
+    return await stripe.refunds.create({
+      payment_intent: paymentIntentId,
+      amount,
+      reason
+    });
+  } catch (error) {
+    console.error('Error refunding payment:', error);
+    throw new Error('Failed to refund payment');
+  }
+};
+
 module.exports = {
   stripe,
   createCustomer,
@@ -205,5 +313,11 @@ module.exports = {
   createCheckoutSession,
   cancelSubscription,
   retrieveSubscription,
-  updateSubscription
+  updateSubscription,
+  createTicketPaymentIntent,
+  createEphemeralKey,
+  retrievePaymentIntent,
+  capturePaymentIntent,
+  updatePaymentIntent,
+  refundPayment
 }; 

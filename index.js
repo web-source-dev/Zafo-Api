@@ -39,11 +39,15 @@ const authRoutes = require('./routes/auth');
 const eventRoutes = require('./routes/events');
 const adminRoutes = require('./routes/admin');
 const subscriptionRoutes = require('./routes/subscriptions');
+const savedEventRoutes = require('./routes/saved-events');
+const ticketRoutes = require('./routes/tickets');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
+app.use('/api/saved-events', savedEventRoutes);
+app.use('/api/tickets', ticketRoutes);
 
 // Basic route
 app.get('/', (req, res) => {
