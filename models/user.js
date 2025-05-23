@@ -35,6 +35,14 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  isSubscribed: {
+    type: Boolean,
+    default: false
+  },
+  stripeCustomerId: {
+    type: String,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now
@@ -79,6 +87,11 @@ userSchema.methods.isAdmin = function() {
 // Method to check if user has organizer permission
 userSchema.methods.isOrganizer = function() {
   return this.role === 'organizer' || this.role === 'admin';
+};
+
+// Method to check if user has active subscription
+userSchema.methods.hasActiveSubscription = function() {
+  return this.isSubscribed === true;
 };
 
 const User = mongoose.model('User', userSchema);

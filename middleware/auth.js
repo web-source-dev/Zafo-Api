@@ -76,8 +76,31 @@ const authorizeOrganizer = (req, res, next) => {
   next();
 };
 
+/**
+ * Subscription middleware to check if user has an active subscription
+ * Must be used after authenticate middleware
+ * Admins are exempt from subscription requirements
+ */
+const requireSubscription = (req, res, next) => {
+  // Skip subscription check for admins
+  if (req.user && req.user.role === 'admin') {
+    return next();
+  }
+  
+  // Check if user has active subscription
+  if (!req.user || !req.user.isSubscribed) {
+    return res.status(403).json({
+      success: false,
+      message: 'Subscription required. Please subscribe to access this feature.'
+    });
+  }
+  
+  next();
+};
+
 module.exports = {
   authenticate,
   authorizeAdmin,
-  authorizeOrganizer
+  authorizeOrganizer,
+  requireSubscription
 };
