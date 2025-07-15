@@ -1,5 +1,6 @@
 const User = require('../models/user');
 const mongoose = require('mongoose');
+const schedulerService = require('../services/scheduler-service');
 
 /**
  * @desc    Get admin dashboard stats
@@ -401,6 +402,99 @@ const getActivities = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Get scheduler status
+ * @route   GET /api/admin/scheduler/status
+ * @access  Private (Admin only)
+ */
+const getSchedulerStatus = async (req, res) => {
+  try {
+    const status = schedulerService.getStatus();
+    
+    res.status(200).json({
+      success: true,
+      data: status
+    });
+  } catch (error) {
+    console.error('Get scheduler status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get scheduler status',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * @desc    Run transfer to organizers immediately
+ * @route   POST /api/admin/scheduler/run-transfer
+ * @access  Private (Admin only)
+ */
+const runTransferNow = async (req, res) => {
+  try {
+    const results = await schedulerService.runTransferNow();
+    
+    res.status(200).json({
+      success: true,
+      data: results,
+      message: 'Transfer completed successfully'
+    });
+  } catch (error) {
+    console.error('Run transfer error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to run transfer',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * @desc    Start scheduler
+ * @route   POST /api/admin/scheduler/start
+ * @access  Private (Admin only)
+ */
+const startScheduler = async (req, res) => {
+  try {
+    schedulerService.start();
+    
+    res.status(200).json({
+      success: true,
+      message: 'Scheduler started successfully'
+    });
+  } catch (error) {
+    console.error('Start scheduler error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to start scheduler',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * @desc    Stop scheduler
+ * @route   POST /api/admin/scheduler/stop
+ * @access  Private (Admin only)
+ */
+const stopScheduler = async (req, res) => {
+  try {
+    schedulerService.stop();
+    
+    res.status(200).json({
+      success: true,
+      message: 'Scheduler stopped successfully'
+    });
+  } catch (error) {
+    console.error('Stop scheduler error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to stop scheduler',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = {
   getStats,
   getSystemStatus,
@@ -410,5 +504,9 @@ module.exports = {
   updateUser,
   deleteUser,
   changeUserPassword,
-  getActivities
+  getActivities,
+  getSchedulerStatus,
+  runTransferNow,
+  startScheduler,
+  stopScheduler
 }; 

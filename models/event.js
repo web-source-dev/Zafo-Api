@@ -119,13 +119,19 @@ const eventSchema = new mongoose.Schema({
   price: {
     amount: { type: Number, default: 0 },
     currency: { type: String, default: 'EUR' },
-    isFree: { type: Boolean, default: true }
+    isFree: { type: Boolean, default: true },
+    platformFee: { type: Number } // Platform fee based on event duration
   },
+  
+  // Payment Status
+  isPaid: { type: Boolean, default: false },
+  paidAt: { type: Date },
+  paymentId: { type: String },
   
   // Status and Visibility
   status: {
     type: String,
-    enum: ['draft', 'published', 'canceled', 'completed'],
+    enum: ['draft', 'published', 'canceled', 'completed', 'pending_payment'],
     default: 'draft'
   },
   isPublic: {

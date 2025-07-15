@@ -1,105 +1,143 @@
 const mongoose = require('mongoose');
-const { v4: uuidv4 } = require('uuid');
 
 /**
- * Individual ticket schema (for each seat/person)
- */
-const individualTicketSchema = new mongoose.Schema({
-  ticketNumber: {
-    type: String,
-    required: [true, 'Ticket number is required'],
-    validate: {
-      validator: function(v) {
-        return v && v.startsWith('TKT-') && v.length >= 12;
-      },
-      message: props => `${props.value} is not a valid ticket number format!`
-    }
-  },
-  attendeeName: {
-    type: String,
-    default: null
-  },
-  attendeeEmail: {
-    type: String,
-    default: null
-  },
-  isCheckedIn: {
-    type: Boolean,
-    default: false
-  },
-  checkedInAt: {
-    type: Date,
-    default: null
-  },
-  qrCodeUrl: {
-    type: String,
-    default: null
-  }
-});
-
-// Add a pre-save hook to ensure ticket numbers are always set
-individualTicketSchema.pre('save', function(next) {
-  if (!this.ticketNumber) {
-    this.ticketNumber = `TKT-${uuidv4().substring(0, 8).toUpperCase()}`;
-  }
-  next();
-});
-
-/**
- * Ticket Order Schema
- * Contains information about a ticket purchase
+ * Ticket Schema
+ * Handles ticket sales and payment tracking
  */
 const ticketSchema = new mongoose.Schema({
-  // Core details
-  event: {
+  // Ticket Details
+  eventId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Event',
-    required: [true, 'Event is required']
+    required: [true, 'Event ID is required']
   },
-  user: {
+  attendee: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: [true, 'User is required']
+    required: [true, 'Attendee is required']
+  },
+  organizer: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'Organizer is required']
   },
   
-  // Ticket information
+  // Multiple Tickets Support
   quantity: {
     type: Number,
     required: [true, 'Quantity is required'],
-    min: [1, 'Quantity must be at least 1']
+    min: [1, 'Quantity must be at least 1'],
+    default: 1
   },
-  tickets: [individualTicketSchema],
   
-  // Payment information
-  amount: {
+  // Individual ticket details for multiple tickets
+  ticketDetails: [{
+    attendeeName: {
+      type: String,
+      required: [true, 'Attendee name is required']
+    },
+    attendeeEmail: {
+      type: String,
+      required: [true, 'Attendee email is required']
+    },
+    ticketNumber: {
+      type: Number,
+      required: [true, 'Ticket number is required']
+    },
+    // New fields for partial refund support
+    refundStatus: {
+      type: String,
+      enum: ['none', 'requested', 'approved', 'rejected', 'completed'],
+      default: 'none'
+    },
+    refundAmount: {
+      type: Number,
+      default: 0
+    },
+    refundReason: {
+      type: String
+    },
+    refundedAt: {
+      type: Date
+    }
+  }],
+  
+  // Payment Details
+  ticketPrice: {
     type: Number,
-    required: [true, 'Amount is required']
+    required: [true, 'Ticket price is required'],
+    min: [0, 'Ticket price cannot be negative']
   },
   currency: {
     type: String,
-    default: 'EUR'
+    default: 'CHF',
+    required: [true, 'Currency is required']
   },
-  paymentIntentId: {
-    type: String
+  
+  // Platform Fee (10% of total ticket price)
+  platformFee: {
+    type: Number,
+    required: [true, 'Platform fee is required'],
+    min: [0, 'Platform fee cannot be negative']
   },
+  
+  // Organizer Payment (90% of total ticket price)
+  organizerPayment: {
+    type: Number,
+    required: [true, 'Organizer payment is required'],
+    min: [0, 'Organizer payment cannot be negative']
+  },
+  
+  // Stripe Payment Details
+  stripePaymentIntentId: {
+    type: String,
+    required: [true, 'Stripe payment intent ID is required']
+  },
+  stripeTransferId: {
+    type: String,
+    default: null // Will be set when we transfer money to organizer
+  },
+  
+  // Payment Status
   paymentStatus: {
     type: String,
-    enum: ['pending', 'processing', 'succeeded', 'failed', 'refunded'],
+    enum: ['pending', 'paid', 'failed', 'refunded', 'partially_refunded'],
     default: 'pending'
   },
   
-  // PDF and tracking
-  pdfUrl: {
+  // Overall Refund Details (for backward compatibility)
+  refundStatus: {
     type: String,
-    default: null
+    enum: ['none', 'requested', 'approved', 'rejected', 'completed'],
+    default: 'none'
   },
-  orderNumber: {
+  refundAmount: {
+    type: Number,
+    default: 0
+  },
+  cancellationFee: {
+    type: Number,
+    default: 2.50 // 2.50 CHF cancellation fee per ticket
+  },
+  refundReason: {
+    type: String
+  },
+  refundedAt: {
+    type: Date
+  },
+  
+  // Transfer Status
+  organizerTransferStatus: {
     type: String,
-    default: () => `ORD-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`
+    enum: ['pending', 'completed', 'failed'],
+    default: 'pending'
+  },
+  organizerTransferDate: {
+    type: Date
   },
   
   // Timestamps
-  createdAt: {
+  purchasedAt: {
     type: Date,
     default: Date.now
   },
@@ -111,32 +149,59 @@ const ticketSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Create a compound index on event and user for faster lookups
-ticketSchema.index({ event: 1, user: 1 });
+// Index for efficient queries
+ticketSchema.index({ eventId: 1, attendee: 1 });
+ticketSchema.index({ organizer: 1 });
+ticketSchema.index({ paymentStatus: 1 });
+ticketSchema.index({ organizerTransferStatus: 1 });
 
-// Create a unique index for ticket numbers within the tickets array
-ticketSchema.index({ 'tickets.ticketNumber': 1 }, { unique: true, sparse: true });
+// Virtual for total amount
+ticketSchema.virtual('totalAmount').get(function() {
+  return this.ticketPrice + this.platformFee;
+});
 
-// Add pre-save hook to ensure all tickets have unique numbers
-ticketSchema.pre('save', async function(next) {
-  // Ensure each ticket has a ticket number set
-  const ticketNumbers = new Set();
-  
-  for (const ticket of this.tickets) {
-    if (!ticket.ticketNumber) {
-      ticket.ticketNumber = `TKT-${uuidv4().substring(0, 8).toUpperCase()}`;
-    }
-    
-    // Check for duplicates within this document
-    if (ticketNumbers.has(ticket.ticketNumber)) {
-      return next(new Error(`Duplicate ticket number ${ticket.ticketNumber} found in the same order`));
-    }
-    
-    ticketNumbers.add(ticket.ticketNumber);
+// Method to calculate refund amounts
+ticketSchema.methods.calculateRefundAmount = function() {
+  if (this.refundStatus === 'none') {
+    return 0;
   }
   
-  next();
-});
+  // If fully refunded, return the ticket price minus cancellation fee
+  if (this.refundStatus === 'completed') {
+    return Math.max(0, this.ticketPrice - this.cancellationFee);
+  }
+  
+  return this.refundAmount;
+};
+
+// Method to check if refund is possible
+ticketSchema.methods.canRefund = function() {
+  return this.paymentStatus === 'paid' && 
+         this.refundStatus === 'none' && 
+         new Date() < new Date(this.eventId.endDate);
+};
+
+// Method to get refundable tickets
+ticketSchema.methods.getRefundableTickets = function() {
+  return this.ticketDetails.filter(detail => detail.refundStatus === 'none');
+};
+
+// Method to calculate partial refund amount
+ticketSchema.methods.calculatePartialRefundAmount = function(ticketNumbers) {
+  const refundableTickets = this.ticketDetails.filter(detail => 
+    ticketNumbers.includes(detail.ticketNumber) && detail.refundStatus === 'none'
+  );
+  
+  if (refundableTickets.length === 0) {
+    return 0;
+  }
+  
+  const pricePerTicket = this.ticketPrice / this.quantity;
+  const totalRefundAmount = refundableTickets.length * pricePerTicket;
+  const cancellationFee = refundableTickets.length * 2.50; // 2.50 CHF per ticket
+  
+  return Math.max(0, totalRefundAmount - cancellationFee);
+};
 
 const Ticket = mongoose.model('Ticket', ticketSchema);
 

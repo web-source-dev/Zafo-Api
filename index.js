@@ -13,8 +13,6 @@ dotenv.config();
 // Create Express app
 const app = express();
 
-// Special middleware for Stripe webhooks - must be before other app.use calls that process the body
-app.use('/api/subscriptions/webhook', express.raw({ type: 'application/json' }));
 
 // Set up middleware for other routes
 app.use(express.json({ limit: '10mb' }));
@@ -38,17 +36,16 @@ mongoose.connect(MONGODB_URI)
 const authRoutes = require('./routes/auth');
 const eventRoutes = require('./routes/events');
 const adminRoutes = require('./routes/admin');
-const subscriptionRoutes = require('./routes/subscriptions');
-const savedEventRoutes = require('./routes/saved-events');
+const paymentRoutes = require('./routes/payments');
 const ticketRoutes = require('./routes/tickets');
+const organizerRoutes = require('./routes/organizer');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api/subscriptions', subscriptionRoutes);
-app.use('/api/saved-events', savedEventRoutes);
+app.use('/api/payments', paymentRoutes);
 app.use('/api/tickets', ticketRoutes);
-
+app.use('/api/organizer', organizerRoutes);
 // Basic route
 app.get('/', (req, res) => {
   res.json({ message: 'Welcome to Zafo API' });
@@ -71,8 +68,12 @@ app.use((err, req, res, next) => {
 
 // Start server
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+// Start scheduler service
+const schedulerService = require('./services/scheduler-service');
+schedulerService.start();
 
 module.exports = app;

@@ -9,7 +9,11 @@ const {
   updateUser,
   deleteUser,
   changeUserPassword,
-  getActivities
+  getActivities,
+  getSchedulerStatus,
+  runTransferNow,
+  startScheduler,
+  stopScheduler
 } = require('../controllers/admin-controller');
 const { authenticate, authorizeAdmin } = require('../middleware/auth');
 
@@ -78,5 +82,33 @@ router.put('/users/:id/password', changeUserPassword);
  * @access  Private (Admin only)
  */
 router.get('/activities', getActivities);
+
+/**
+ * @desc    Get scheduler status
+ * @route   GET /api/admin/scheduler/status
+ * @access  Private (Admin only)
+ */
+router.get('/scheduler/status', getSchedulerStatus);
+
+/**
+ * @desc    Run transfer to organizers immediately
+ * @route   POST /api/admin/scheduler/run-transfer
+ * @access  Private (Admin only)
+ */
+router.post('/scheduler/run-transfer', runTransferNow);
+
+/**
+ * @desc    Start scheduler
+ * @route   POST /api/admin/scheduler/start
+ * @access  Private (Admin only)
+ */
+router.post('/scheduler/start', startScheduler);
+
+/**
+ * @desc    Stop scheduler
+ * @route   POST /api/admin/scheduler/stop
+ * @access  Private (Admin only)
+ */
+router.post('/scheduler/stop', stopScheduler);
 
 module.exports = router; 

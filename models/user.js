@@ -35,10 +35,6 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
-  isSubscribed: {
-    type: Boolean,
-    default: false
-  },
   stripeCustomerId: {
     type: String,
     default: null
@@ -89,10 +85,7 @@ userSchema.methods.isOrganizer = function() {
   return this.role === 'organizer' || this.role === 'admin';
 };
 
-// Method to check if user has active subscription
-userSchema.methods.hasActiveSubscription = function() {
-  return this.isSubscribed === true;
-};
+
 
 const User = mongoose.model('User', userSchema);
 

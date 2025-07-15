@@ -28,9 +28,10 @@
     "morgan": "^1.10.0",
     "multer": "^2.0.0",
     "multer-storage-cloudinary": "^4.0.0",
+    "node-cron": "^4.2.1",
     "pdfkit": "^0.17.1",
     "qrcode": "^1.5.4",
-    "stripe": "^12.5.0",
+    "stripe": "^12.18.0",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

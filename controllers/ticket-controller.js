@@ -1,123 +1,59 @@
-const mongoose = require('mongoose');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const Ticket = require('../models/ticket');
 const Event = require('../models/event');
 const User = require('../models/user');
-const { 
-  createCustomer, 
-  createTicketPaymentIntent, 
-  retrievePaymentIntent, 
-  createEphemeralKey,
-  stripe  // Import the direct Stripe instance
-} = require('../utils/stripe');
-const { generateTicketPDF } = require('../utils/ticket-generator');
-const { v4: uuidv4 } = require('uuid');
-
-/**
- * Generates a unique ticket number
- * @returns {String} Unique ticket number
- */
-const generateUniqueTicketNumber = () => {
-  return `TKT-${uuidv4().substring(0, 8).toUpperCase()}`;
-};
-
-/**
- * Ensures ticket numbers are unique by verifying against the database
- * @param {Array} ticketNumbers - Array of ticket numbers to check
- * @returns {Promise<Object>} Result with status and any duplicate numbers
- */
-const ensureUniqueTicketNumbers = async (ticketNumbers) => {
-  try {
-    // Find any existing tickets with these numbers
-    const existingTickets = await Ticket.find({
-      'tickets.ticketNumber': { $in: ticketNumbers }
-    });
-    
-    if (existingTickets.length === 0) {
-      // All numbers are unique
-      return { isUnique: true, duplicates: [] };
-    }
-    
-    // Collect all duplicate ticket numbers
-    const duplicateNumbers = [];
-    existingTickets.forEach(order => {
-      order.tickets.forEach(ticket => {
-        if (ticketNumbers.includes(ticket.ticketNumber)) {
-          duplicateNumbers.push(ticket.ticketNumber);
-        }
-      });
-    });
-    
-    return { isUnique: false, duplicates: duplicateNumbers };
-  } catch (error) {
-    console.error('Error checking ticket uniqueness:', error);
-    throw new Error('Failed to check ticket uniqueness');
-  }
-};
-
-/**
- * Creates individual ticket objects for a ticket order
- * @param {Number} quantity - Number of tickets to create
- * @param {Number} maxRetries - Maximum number of retry attempts (default: 3)
- * @returns {Promise<Array>} Array of ticket objects with unique ticket numbers
- */
-const createTickets = async (quantity, maxRetries = 3) => {
-  if (maxRetries <= 0) {
-    throw new Error('Failed to generate unique ticket numbers after multiple attempts');
-  }
-  
-  const tickets = [];
-  const ticketNumbers = [];
-  
-  // Generate initial ticket numbers
-  for (let i = 0; i < quantity; i++) {
-    const ticketNumber = generateUniqueTicketNumber();
-    ticketNumbers.push(ticketNumber);
-    tickets.push({ ticketNumber });
-  }
-  
-  try {
-    // Check if all generated numbers are unique in the database
-    const { isUnique, duplicates } = await ensureUniqueTicketNumbers(ticketNumbers);
-    
-    if (isUnique) {
-      return tickets;
-    }
-    
-    // Some duplicates found, regenerate only the duplicate numbers
-    console.log(`Found ${duplicates.length} duplicate ticket numbers. Regenerating...`);
-    
-    // Retry with a new set of tickets
-    return createTickets(quantity, maxRetries - 1);
-  } catch (error) {
-    console.error('Error in createTickets:', error);
-    throw new Error('Failed to create tickets with unique numbers');
-  }
-};
 
 /**
  * Ticket Controller
- * Handles all ticket-related operations
+ * Handles all ticket-related operations including purchases, refunds, and transfers
  */
 const ticketController = {
   /**
-   * Initiate ticket purchase
-   * Creates a payment intent for the ticket purchase
+   * Create a ticket purchase
    * @param {Object} req - Request object
    * @param {Object} res - Response object
    */
-  initiateTicketPurchase: async (req, res) => {
+  createTicketPurchase: async (req, res) => {
     try {
-      const { eventId, quantity } = req.body;
+      const { eventId, ticketPrice, currency = 'CHF', quantity = 1, ticketDetails } = req.body;
       
-      if (!eventId || !quantity || quantity < 1) {
+      if (!eventId || !ticketPrice || !quantity || !ticketDetails) {
         return res.status(400).json({
           success: false,
-          message: 'Event ID and quantity are required. Quantity must be at least 1.'
+          message: 'Missing required parameters'
         });
       }
       
-      // Get event details
-      const event = await Event.findById(eventId);
+      // Validate quantity
+      if (quantity < 1) {
+        return res.status(400).json({
+          success: false,
+          message: 'Quantity must be at least 1'
+        });
+      }
+      
+      // Validate ticket details
+      if (!Array.isArray(ticketDetails) || ticketDetails.length !== quantity) {
+        return res.status(400).json({
+          success: false,
+          message: 'Ticket details must match quantity'
+        });
+      }
+      
+      // Validate each ticket detail
+      for (let i = 0; i < ticketDetails.length; i++) {
+        const detail = ticketDetails[i];
+        if (!detail.attendeeName || !detail.attendeeEmail) {
+          return res.status(400).json({
+            success: false,
+            message: `Missing attendee name or email for ticket ${i + 1}`
+          });
+        }
+      }
+      
+      // Find the event
+      const event = await Event.findById(eventId).populate('organizer');
+      
       if (!event) {
         return res.status(404).json({
           success: false,
@@ -125,267 +61,516 @@ const ticketController = {
         });
       }
       
-      // Check if event is published and available for ticket purchases
+      // Check if event is published and has capacity
       if (event.status !== 'published') {
         return res.status(400).json({
           success: false,
-          message: 'Tickets cannot be purchased for this event at this time'
+          message: 'Event is not available for ticket purchase'
         });
       }
       
-      // Check if tickets are available (compare against capacity)
-      const soldTickets = await Ticket.aggregate([
-        { $match: { event: new mongoose.Types.ObjectId(eventId) } },
-        { $group: { _id: null, totalSold: { $sum: '$quantity' } } }
-      ]);
-      
-      const totalSold = soldTickets.length > 0 ? soldTickets[0].totalSold : 0;
-      const remainingCapacity = event.capacity - totalSold;
-      
-      if (remainingCapacity < quantity) {
+      // Check if user is not the organizer
+      if (req.user._id.toString() === event.organizer._id.toString()) {
         return res.status(400).json({
           success: false,
-          message: `Only ${remainingCapacity} tickets available for this event`
+          message: 'Organizers cannot purchase tickets for their own events'
         });
       }
       
-      // Calculate ticket price
-      const ticketPrice = event.price.isFree ? 0 : event.price.amount;
-      const totalAmount = ticketPrice * quantity;
-      const currency = event.price.currency.toLowerCase();
+      // Calculate total amount and fees
+      const totalTicketPrice = ticketPrice * quantity;
+      // Platform fee is included in the ticket price (10% of total)
+      const platformFee = Math.round(totalTicketPrice * 0.10 * 100) / 100;
+      const organizerPayment = totalTicketPrice - platformFee;
+      const totalAmount = totalTicketPrice; // Total amount is the ticket price (platform fee included)
       
-      // Convert amount to cents for Stripe (Stripe requires amounts in smallest currency unit)
-      const amountInCents = Math.round(totalAmount * 100);
+      // Create Stripe payment intent
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(totalAmount * 100), // Convert to cents
+        currency: currency.toLowerCase(),
+        metadata: {
+          eventId: eventId,
+          attendeeId: req.user._id.toString(),
+          organizerId: event.organizer._id.toString(),
+          ticketPrice: totalTicketPrice.toString(),
+          platformFee: platformFee.toString(),
+          organizerPayment: organizerPayment.toString(),
+          quantity: quantity.toString()
+        },
+        automatic_payment_methods: {
+          enabled: true,
+        },
+      });
       
-      // Check if user has a Stripe customer ID
-      let customerId = req.user.stripeCustomerId;
-      
-      if (!customerId) {
-        // Create a Stripe customer if one doesn't exist
-        const customer = await createCustomer(req.user);
-        customerId = customer.id;
-        
-        // Update user with Stripe customer ID
-        await User.findByIdAndUpdate(req.user._id, {
-          stripeCustomerId: customerId
-        });
-      }
-      
-      // Create a payment intent for the ticket purchase
-      const paymentIntent = await createTicketPaymentIntent(
-        amountInCents,
-        currency,
-        customerId,
-        {
-          event_id: eventId,
-          event_title: event.title,
-          user_id: req.user._id.toString(),
-          email: req.user.email,
-          quantity: quantity.toString(),
-          description: `${quantity} ticket(s) for ${event.title}`
-        }
-      );
-      
-      // Create ephemeral key for the customer
-      const ephemeralKey = await createEphemeralKey(customerId);
-      
-      // Generate unique ticket objects
-      let tickets;
-      try {
-        tickets = await createTickets(quantity);
-        console.log(`Successfully generated ${tickets.length} unique ticket numbers`);
-      } catch (ticketError) {
-        console.error('Error generating tickets:', ticketError);
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to generate unique tickets. Please try again later.',
-          error: ticketError.message
-        });
-      }
-      
-      // Create a pending ticket order
-      const ticketOrder = new Ticket({
-        event: eventId,
-        user: req.user._id,
-        quantity,
-        tickets,
-        amount: totalAmount,
-        currency,
-        paymentIntentId: paymentIntent.id,
+      // Create ticket record with multiple tickets
+      const ticket = new Ticket({
+        eventId: eventId,
+        attendee: req.user._id,
+        organizer: event.organizer._id,
+        quantity: quantity,
+        ticketDetails: ticketDetails.map((detail, index) => ({
+          attendeeName: detail.attendeeName,
+          attendeeEmail: detail.attendeeEmail,
+          ticketNumber: index + 1
+        })),
+        ticketPrice: totalTicketPrice,
+        currency: currency,
+        platformFee: platformFee,
+        organizerPayment: organizerPayment,
+        stripePaymentIntentId: paymentIntent.id,
         paymentStatus: 'pending'
       });
       
-      try {
-        await ticketOrder.save();
-      } catch (saveError) {
-        console.error('Error saving ticket order:', saveError);
-        
-        // Clean up the payment intent if we can't save the ticket order
-        try {
-          await stripe.paymentIntents.cancel(paymentIntent.id);
-        } catch (cancelError) {
-          console.error('Error canceling payment intent:', cancelError);
-        }
-        
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to create ticket order. Please try again later.',
-          error: saveError.message
-        });
-      }
+      await ticket.save();
       
       res.status(200).json({
         success: true,
-        message: 'Payment intent created successfully',
+        message: 'Ticket purchase initiated',
         data: {
+          ticketId: ticket._id,
           clientSecret: paymentIntent.client_secret,
-          ephemeralKey: ephemeralKey.secret,
-          customerId,
-          paymentIntentId: paymentIntent.id,
-          amount: totalAmount,
-          currency,
-          ticketOrderId: ticketOrder._id
+          totalAmount: totalAmount,
+          platformFee: platformFee,
+          organizerPayment: organizerPayment,
+          quantity: quantity
         }
       });
     } catch (error) {
-      console.error('Initiate ticket purchase error:', error);
+      console.error('Create ticket purchase error:', error);
       res.status(500).json({
         success: false,
-        message: 'Failed to initiate ticket purchase',
+        message: 'Failed to create ticket purchase',
         error: error.message
       });
     }
   },
   
   /**
-   * Complete ticket purchase
-   * Confirms payment and generates PDF tickets
+   * Confirm ticket payment
    * @param {Object} req - Request object
    * @param {Object} res - Response object
    */
-  completeTicketPurchase: async (req, res) => {
+  confirmTicketPayment: async (req, res) => {
     try {
-      const { paymentIntentId, ticketOrderId, attendeeInfo } = req.body;
+      const { ticketId } = req.params;
       
-      if (!paymentIntentId || !ticketOrderId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Payment intent ID and ticket order ID are required'
-        });
-      }
+      // Find the ticket
+      const ticket = await Ticket.findById(ticketId)
+        .populate('eventId')
+        .populate('attendee')
+        .populate('organizer');
       
-      // Find the ticket order
-      const ticketOrder = await Ticket.findById(ticketOrderId);
-      if (!ticketOrder) {
+      if (!ticket) {
         return res.status(404).json({
           success: false,
-          message: 'Ticket order not found'
+          message: 'Ticket not found'
         });
       }
       
-      // Verify that the payment intent matches the ticket order
-      if (ticketOrder.paymentIntentId !== paymentIntentId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Payment intent does not match the ticket order'
-        });
-      }
+      // Verify payment with Stripe
+      const paymentIntent = await stripe.paymentIntents.retrieve(ticket.stripePaymentIntentId);
       
-      // Verify that the user is the owner of the ticket order
-      if (ticketOrder.user.toString() !== req.user._id.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: 'You do not have permission to complete this ticket purchase'
-        });
-      }
-      
-      // Retrieve the payment intent from Stripe to check its status
-      const paymentIntent = await retrievePaymentIntent(paymentIntentId);
-      
-      // Update ticket order with payment status
-      ticketOrder.paymentStatus = paymentIntent.status;
-      
-      // Update attendee information if provided
-      if (attendeeInfo && Array.isArray(attendeeInfo) && attendeeInfo.length > 0) {
-        // Only update as many tickets as we have attendee info for
-        const maxLength = Math.min(attendeeInfo.length, ticketOrder.tickets.length);
-        
-        for (let i = 0; i < maxLength; i++) {
-          if (attendeeInfo[i]) {
-            if (attendeeInfo[i].name) {
-              ticketOrder.tickets[i].attendeeName = attendeeInfo[i].name;
-            }
-            if (attendeeInfo[i].email) {
-              ticketOrder.tickets[i].attendeeEmail = attendeeInfo[i].email;
-            }
-          }
-        }
-      }
-      
-      await ticketOrder.save();
-      
-      // If payment is successful, generate PDF tickets
       if (paymentIntent.status === 'succeeded') {
-        try {
-          // Get event and user details for PDF generation
-          const event = await Event.findById(ticketOrder.event);
-          const user = await User.findById(ticketOrder.user);
-          
-          // Generate PDF tickets
-          const ticketPdf = await generateTicketPDF(ticketOrder, event, user);
-          
-          // Update ticket order with PDF URL
-          ticketOrder.pdfUrl = ticketPdf.url;
-          await ticketOrder.save();
-          
-          // Send success response with PDF URL
-          res.status(200).json({
-            success: true,
-            message: 'Ticket purchase completed successfully',
-            data: {
-              ticketOrder,
-              pdfUrl: ticketPdf.url
-            }
-          });
-        } catch (pdfError) {
-          console.error('Error generating PDF tickets:', pdfError);
-          
-          // Still return success but with error about PDF generation
-          res.status(200).json({
-            success: true,
-            message: 'Payment successful but could not generate tickets. Please contact support.',
-            data: {
-              ticketOrder,
-              pdfError: pdfError.message
-            }
-          });
-        }
-      } else if (paymentIntent.status === 'processing') {
-        // Payment is still processing
+        // Update ticket status
+        ticket.paymentStatus = 'paid';
+        await ticket.save();
+        
         res.status(200).json({
           success: true,
-          message: 'Payment is processing. Tickets will be generated once payment is complete.',
+          message: 'Ticket payment confirmed',
           data: {
-            ticketOrder,
-            paymentStatus: paymentIntent.status
+            ticketId: ticket._id,
+            paymentStatus: ticket.paymentStatus,
+            totalAmount: ticket.ticketPrice + ticket.platformFee,
+            quantity: ticket.quantity
           }
         });
       } else {
-        // Payment failed or was canceled
         res.status(400).json({
           success: false,
-          message: `Payment ${paymentIntent.status}. Please try again or contact support.`,
+          message: 'Payment not completed',
           data: {
-            ticketOrder,
             paymentStatus: paymentIntent.status
           }
         });
       }
     } catch (error) {
-      console.error('Complete ticket purchase error:', error);
+      console.error('Confirm ticket payment error:', error);
       res.status(500).json({
         success: false,
-        message: 'Failed to complete ticket purchase',
+        message: 'Failed to confirm ticket payment',
+        error: error.message
+      });
+    }
+  },
+  
+  /**
+   * Request ticket refund
+   * @param {Object} req - Request object
+   * @param {Object} res - Response object
+   */
+  requestTicketRefund: async (req, res) => {
+    try {
+      const { ticketId } = req.params;
+      const { reason, refundTickets } = req.body; // refundTickets is array of ticket numbers to refund
+      
+      if (!reason || reason.trim() === '') {
+        return res.status(400).json({
+          success: false,
+          message: 'Refund reason is required'
+        });
+      }
+      
+      // Find the ticket with populated event data
+      const ticket = await Ticket.findById(ticketId)
+        .populate('eventId')
+        .populate('attendee');
+      
+      if (!ticket) {
+        return res.status(404).json({
+          success: false,
+          message: 'Ticket not found'
+        });
+      }
+      
+      // Check if user can refund this ticket
+      if (req.user._id.toString() !== ticket.attendee._id.toString() && req.user.role !== 'admin') {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not authorized to refund this ticket'
+        });
+      }
+      
+      // Check if payment is completed
+      if (ticket.paymentStatus !== 'paid') {
+        return res.status(400).json({
+          success: false,
+          message: 'Only paid tickets can be refunded'
+        });
+      }
+      
+      // Check if event exists and get end date
+      if (!ticket.eventId || typeof ticket.eventId === 'string') {
+        return res.status(400).json({
+          success: false,
+          message: 'Event information not found'
+        });
+      }
+      
+      // Check if refund is possible (event must not be ended)
+      const eventEndDate = new Date(ticket.eventId.endDate);
+      const currentDate = new Date();
+      
+      if (eventEndDate <= currentDate) {
+        return res.status(400).json({
+          success: false,
+          message: 'Refund is not possible after event end date'
+        });
+      }
+      
+      // Determine which tickets to refund
+      let ticketsToRefund = [];
+      if (refundTickets && Array.isArray(refundTickets) && refundTickets.length > 0) {
+        // Partial refund - specific tickets
+        ticketsToRefund = ticket.ticketDetails.filter(detail => 
+          refundTickets.includes(detail.ticketNumber) && detail.refundStatus === 'none'
+        );
+      } else {
+        // Full refund - all tickets
+        ticketsToRefund = ticket.ticketDetails.filter(detail => detail.refundStatus === 'none');
+      }
+      
+      if (ticketsToRefund.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No refundable tickets found'
+        });
+      }
+      
+      // Calculate refund amount
+      const pricePerTicket = ticket.ticketPrice / ticket.quantity;
+      const totalRefundAmount = ticketsToRefund.length * pricePerTicket;
+      const cancellationFee = ticketsToRefund.length * 2.50; // 2.50 CHF per ticket
+      const refundAmount = Math.max(0, totalRefundAmount - cancellationFee);
+      
+      // Update ticket refund status
+      if (ticketsToRefund.length === ticket.quantity) {
+        // Full refund
+        ticket.refundStatus = 'requested';
+        ticket.refundAmount = refundAmount;
+        ticket.cancellationFee = cancellationFee;
+        ticket.refundReason = reason.trim();
+      } else {
+        // Partial refund
+        ticket.refundStatus = 'requested';
+        ticket.refundAmount = refundAmount;
+        ticket.cancellationFee = cancellationFee;
+        ticket.refundReason = reason.trim();
+        
+        // Update individual ticket status
+        ticketsToRefund.forEach(ticketDetail => {
+          const detail = ticket.ticketDetails.find(d => d.ticketNumber === ticketDetail.ticketNumber);
+          if (detail) {
+            detail.refundStatus = 'requested';
+            detail.refundAmount = pricePerTicket - 2.50; // Individual ticket refund amount
+            detail.refundReason = reason.trim();
+          }
+        });
+      }
+      
+      await ticket.save();
+      
+      res.status(200).json({
+        success: true,
+        message: 'Refund request submitted successfully',
+        data: {
+          ticketId: ticket._id,
+          refundAmount: refundAmount,
+          cancellationFee: cancellationFee,
+          refundStatus: ticket.refundStatus,
+          eventTitle: ticket.eventId.title,
+          eventEndDate: ticket.eventId.endDate,
+          quantity: ticketsToRefund.length,
+          refundedTickets: ticketsToRefund.map(t => ({
+            ticketNumber: t.ticketNumber,
+            attendeeName: t.attendeeName,
+            attendeeEmail: t.attendeeEmail
+          }))
+        }
+      });
+    } catch (error) {
+      console.error('Request ticket refund error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to request ticket refund',
+        error: error.message
+      });
+    }
+  },
+  
+  /**
+   * Process ticket refund (admin/organizer only)
+   * @param {Object} req - Request object
+   * @param {Object} res - Response object
+   */
+  processTicketRefund: async (req, res) => {
+    try {
+      const { ticketId } = req.params;
+      const { action, refundTickets } = req.body; // refundTickets is array of ticket numbers to refund
+      
+      if (!action || !['approve', 'reject'].includes(action)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid action. Must be "approve" or "reject"'
+        });
+      }
+      
+      // Find the ticket with populated data
+      const ticket = await Ticket.findById(ticketId)
+        .populate('eventId')
+        .populate('attendee')
+        .populate('organizer');
+      
+      if (!ticket) {
+        return res.status(404).json({
+          success: false,
+          message: 'Ticket not found'
+        });
+      }
+      
+      // Check if user can process this refund
+      const isOrganizer = req.user._id.toString() === ticket.organizer._id.toString();
+      const isAdmin = req.user.role === 'admin';
+      
+      if (!isOrganizer && !isAdmin) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not authorized to process this refund'
+        });
+      }
+      
+      // Check if refund is in requested state
+      if (ticket.refundStatus !== 'requested') {
+        return res.status(400).json({
+          success: false,
+          message: 'Refund is not in requested state'
+        });
+      }
+      
+      if (action === 'reject') {
+        // Reject the refund
+        ticket.refundStatus = 'rejected';
+        
+        // Reset individual ticket refund status
+        ticket.ticketDetails.forEach(detail => {
+          if (detail.refundStatus === 'requested') {
+            detail.refundStatus = 'rejected';
+          }
+        });
+        
+        await ticket.save();
+        
+        res.status(200).json({
+          success: true,
+          message: 'Refund request rejected',
+          data: {
+            ticketId: ticket._id,
+            refundStatus: ticket.refundStatus
+          }
+        });
+      } else if (action === 'approve') {
+        // Process the refund through Stripe
+        try {
+          // Create refund in Stripe
+          const refund = await stripe.refunds.create({
+            payment_intent: ticket.stripePaymentIntentId,
+            amount: Math.round(ticket.refundAmount * 100), // Convert to cents
+            metadata: {
+              ticketId: ticket._id.toString(),
+              refundType: 'ticket_cancellation',
+              cancellationFee: ticket.cancellationFee.toString(),
+              quantity: ticket.quantity.toString(),
+              refundedTickets: JSON.stringify(refundTickets || [])
+            }
+          });
+          
+          // Update ticket status
+          ticket.refundStatus = 'completed';
+          ticket.refundedAt = new Date();
+          
+          // Update individual ticket status
+          ticket.ticketDetails.forEach(detail => {
+            if (detail.refundStatus === 'requested') {
+              detail.refundStatus = 'completed';
+              detail.refundedAt = new Date();
+            }
+          });
+          
+          // Update payment status based on refund amount
+          if (ticket.refundAmount >= ticket.ticketPrice) {
+            ticket.paymentStatus = 'refunded';
+          } else {
+            ticket.paymentStatus = 'partially_refunded';
+          }
+          
+          await ticket.save();
+          
+          res.status(200).json({
+            success: true,
+            message: 'Refund processed successfully',
+            data: {
+              ticketId: ticket._id,
+              refundAmount: ticket.refundAmount,
+              cancellationFee: ticket.cancellationFee,
+              refundStatus: ticket.refundStatus,
+              stripeRefundId: refund.id,
+              quantity: ticket.quantity
+            }
+          });
+        } catch (stripeError) {
+          console.error('Stripe refund error:', stripeError);
+          res.status(500).json({
+            success: false,
+            message: 'Failed to process refund through Stripe',
+            error: stripeError.message
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Process ticket refund error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to process ticket refund',
+        error: error.message
+      });
+    }
+  },
+  
+  /**
+   * Transfer money to organizers for completed events
+   * @param {Object} req - Request object
+   * @param {Object} res - Response object
+   */
+  transferToOrganizers: async (req, res) => {
+    try {
+      // Find all paid tickets for completed events that haven't been transferred yet
+      const pendingTransfers = await Ticket.find({
+        paymentStatus: 'paid',
+        organizerTransferStatus: 'pending'
+      }).populate('eventId').populate('organizer');
+      
+      const completedEvents = pendingTransfers.filter(ticket => {
+        return new Date(ticket.eventId.endDate) < new Date();
+      });
+      
+      const transferResults = [];
+      
+      for (const ticket of completedEvents) {
+        try {
+          // Check if organizer has Stripe account
+          if (!ticket.organizer.stripeCustomerId) {
+            // Skip this ticket for now - organizer needs to set up Stripe
+            transferResults.push({
+              ticketId: ticket._id,
+              status: 'skipped',
+              reason: 'Organizer has no Stripe account'
+            });
+            continue;
+          }
+          
+          // Create transfer to organizer
+          const transfer = await stripe.transfers.create({
+            amount: Math.round(ticket.organizerPayment * 100), // Convert to cents
+            currency: ticket.currency.toLowerCase(),
+            destination: ticket.organizer.stripeCustomerId,
+            metadata: {
+              ticketId: ticket._id.toString(),
+              eventId: ticket.eventId._id.toString(),
+              organizerId: ticket.organizer._id.toString()
+            }
+          });
+          
+          // Update ticket transfer status
+          ticket.organizerTransferStatus = 'completed';
+          ticket.stripeTransferId = transfer.id;
+          ticket.organizerTransferDate = new Date();
+          await ticket.save();
+          
+          transferResults.push({
+            ticketId: ticket._id,
+            status: 'completed',
+            transferId: transfer.id,
+            amount: ticket.organizerPayment
+          });
+          
+        } catch (transferError) {
+          console.error(`Transfer failed for ticket ${ticket._id}:`, transferError);
+          
+          // Mark transfer as failed
+          ticket.organizerTransferStatus = 'failed';
+          await ticket.save();
+          
+          transferResults.push({
+            ticketId: ticket._id,
+            status: 'failed',
+            error: transferError.message
+          });
+        }
+      }
+      
+      res.status(200).json({
+        success: true,
+        message: 'Transfer process completed',
+        data: {
+          totalProcessed: completedEvents.length,
+          results: transferResults
+        }
+      });
+    } catch (error) {
+      console.error('Transfer to organizers error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to process transfers',
         error: error.message
       });
     }
@@ -398,32 +583,27 @@ const ticketController = {
    */
   getUserTickets: async (req, res) => {
     try {
-      const { status, limit = 10, page = 1, sort = '-createdAt' } = req.query;
+      const { status, page = 1, limit = 10 } = req.query;
       
-      // Build filter object
-      const filter = { user: req.user._id };
-      
-      // Add payment status filter if provided
+      const filter = { attendee: req.user._id };
       if (status) {
         filter.paymentStatus = status;
       }
       
-      // Calculate pagination
       const skip = (page - 1) * limit;
       
-      // Execute query with pagination and sorting
       const tickets = await Ticket.find(filter)
-        .sort(sort)
+        .populate('eventId')
+        .populate('organizer', 'firstName lastName email')
+        .sort({ purchasedAt: -1 })
         .skip(skip)
-        .limit(parseInt(limit))
-        .populate('event', 'title startDate endDate location status coverImage slug');
+        .limit(parseInt(limit));
       
-      // Get total count for pagination
       const total = await Ticket.countDocuments(filter);
       
       res.status(200).json({
         success: true,
-        message: 'User tickets retrieved successfully',
+        message: 'Tickets retrieved successfully',
         data: {
           tickets,
           pagination: {
@@ -437,214 +617,133 @@ const ticketController = {
       console.error('Get user tickets error:', error);
       res.status(500).json({
         success: false,
-        message: 'Failed to retrieve user tickets',
+        message: 'Failed to retrieve tickets',
         error: error.message
       });
     }
   },
   
   /**
-   * Get ticket order by ID
+   * Get organizer's ticket sales
    * @param {Object} req - Request object
    * @param {Object} res - Response object
    */
-  getTicketById: async (req, res) => {
+  getOrganizerTickets: async (req, res) => {
     try {
-      const { id } = req.params;
+      const { status, eventId, page = 1, limit = 10 } = req.query;
       
-      // Find the ticket order
-      const ticketOrder = await Ticket.findById(id)
-        .populate('event', 'title startDate endDate location status coverImage slug')
-        .populate('user', 'firstName lastName email');
-      
-      if (!ticketOrder) {
-        return res.status(404).json({
-          success: false,
-          message: 'Ticket order not found'
-        });
+      const filter = { organizer: req.user._id };
+      if (status) {
+        filter.paymentStatus = status;
+      }
+      if (eventId) {
+        filter.eventId = eventId;
       }
       
-      // Check if user has permission to view this ticket
-      if (ticketOrder.user._id.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
-        return res.status(403).json({
-          success: false,
-          message: 'You do not have permission to view this ticket'
-        });
-      }
+      const skip = (page - 1) * limit;
+      
+      const tickets = await Ticket.find(filter)
+        .populate('eventId')
+        .populate('attendee', 'firstName lastName email')
+        .sort({ purchasedAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit));
+      
+      const total = await Ticket.countDocuments(filter);
       
       res.status(200).json({
         success: true,
-        message: 'Ticket order retrieved successfully',
-        data: ticketOrder
-      });
-    } catch (error) {
-      console.error('Get ticket by ID error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to retrieve ticket order',
-        error: error.message
-      });
-    }
-  },
-  
-  /**
-   * Validate a ticket (for event check-in)
-   * @param {Object} req - Request object
-   * @param {Object} res - Response object
-   */
-  validateTicket: async (req, res) => {
-    try {
-      const { ticketNumber, eventId } = req.body;
-      
-      if (!ticketNumber || !eventId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Ticket number and event ID are required'
-        });
-      }
-      
-      // Find ticket order that contains this ticket
-      const ticketOrder = await Ticket.findOne({
-        event: eventId,
-        'tickets.ticketNumber': ticketNumber,
-        paymentStatus: 'succeeded'
-      });
-      
-      if (!ticketOrder) {
-        return res.status(404).json({
-          success: false,
-          message: 'Ticket not found or payment not completed'
-        });
-      }
-      
-      // Find the specific ticket in the order
-      const ticketIndex = ticketOrder.tickets.findIndex(
-        ticket => ticket.ticketNumber === ticketNumber
-      );
-      
-      if (ticketIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          message: 'Ticket not found in order'
-        });
-      }
-      
-      const ticket = ticketOrder.tickets[ticketIndex];
-      
-      // Check if ticket is already checked in
-      if (ticket.isCheckedIn) {
-        return res.status(400).json({
-          success: false,
-          message: 'Ticket has already been used for check-in'
-        });
-      }
-      
-      // Mark ticket as checked in
-      ticketOrder.tickets[ticketIndex].isCheckedIn = true;
-      ticketOrder.tickets[ticketIndex].checkedInAt = new Date();
-      
-      await ticketOrder.save();
-      
-      res.status(200).json({
-        success: true,
-        message: 'Ticket validated and checked in successfully',
+        message: 'Organizer tickets retrieved successfully',
         data: {
-          ticketNumber,
-          checkedInAt: ticketOrder.tickets[ticketIndex].checkedInAt,
-          eventId,
-          orderId: ticketOrder._id
+          tickets,
+          pagination: {
+            total,
+            page: parseInt(page),
+            pages: Math.ceil(total / limit)
+          }
         }
       });
     } catch (error) {
-      console.error('Validate ticket error:', error);
+      console.error('Get organizer tickets error:', error);
       res.status(500).json({
         success: false,
-        message: 'Failed to validate ticket',
+        message: 'Failed to retrieve organizer tickets',
         error: error.message
       });
     }
   },
-  
+
   /**
-   * Update attendee information for a ticket
+   * Get all refund requests (admin only)
    * @param {Object} req - Request object
    * @param {Object} res - Response object
    */
-  updateAttendeeInfo: async (req, res) => {
+  getAllRefundRequests: async (req, res) => {
     try {
-      const { ticketOrderId, ticketNumber, attendeeName, attendeeEmail } = req.body;
-      
-      if (!ticketOrderId || !ticketNumber) {
-        return res.status(400).json({
-          success: false,
-          message: 'Ticket order ID and ticket number are required'
-        });
-      }
-      
-      // Find the ticket order
-      const ticketOrder = await Ticket.findById(ticketOrderId);
-      
-      if (!ticketOrder) {
-        return res.status(404).json({
-          success: false,
-          message: 'Ticket order not found'
-        });
-      }
-      
-      // Verify that the user is the owner of the ticket order
-      if (ticketOrder.user.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+      // Only admin can access
+      if (!req.user || req.user.role !== 'admin') {
         return res.status(403).json({
           success: false,
-          message: 'You do not have permission to update this ticket'
+          message: 'Admin access required'
         });
       }
       
-      // Find the specific ticket in the order
-      const ticketIndex = ticketOrder.tickets.findIndex(
-        ticket => ticket.ticketNumber === ticketNumber
-      );
-      
-      if (ticketIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          message: 'Ticket not found in order'
-        });
-      }
-      
-      // Update attendee information
-      if (attendeeName) {
-        ticketOrder.tickets[ticketIndex].attendeeName = attendeeName;
-      }
-      
-      if (attendeeEmail) {
-        ticketOrder.tickets[ticketIndex].attendeeEmail = attendeeEmail;
-      }
-      
-      await ticketOrder.save();
-      
-      // Regenerate PDF with updated information
-      if (ticketOrder.paymentStatus === 'succeeded') {
-        try {
-          const event = await Event.findById(ticketOrder.event);
-          const user = await User.findById(ticketOrder.user);
-          
-          await generateTicketPDF(ticketOrder, event, user);
-        } catch (pdfError) {
-          console.error('Error regenerating PDF tickets:', pdfError);
-          // Continue without failing the request
-        }
-      }
+      // Find all tickets with refund requested
+      const tickets = await Ticket.find({
+        refundStatus: 'requested'
+      })
+        .populate('eventId')
+        .populate('attendee', 'firstName lastName email')
+        .populate('organizer', 'firstName lastName email')
+        .sort({ updatedAt: -1 });
       
       res.status(200).json({
         success: true,
-        message: 'Attendee information updated successfully',
-        data: ticketOrder.tickets[ticketIndex]
+        data: tickets
       });
     } catch (error) {
-      console.error('Update attendee info error:', error);
+      console.error('Get all refund requests error:', error);
       res.status(500).json({
         success: false,
-        message: 'Failed to update attendee information',
+        message: 'Failed to get refund requests',
+        error: error.message
+      });
+    }
+  },
+
+  /**
+   * Get organizer's refund requests (organizer only)
+   * @param {Object} req - Request object
+   * @param {Object} res - Response object
+   */
+  getOrganizerRefundRequests: async (req, res) => {
+    try {
+      // Only organizer or admin can access
+      if (!req.user || (req.user.role !== 'organizer' && req.user.role !== 'admin')) {
+        return res.status(403).json({
+          success: false,
+          message: 'Organizer access required'
+        });
+      }
+      
+      // Find all tickets for this organizer with refund requested
+      const tickets = await Ticket.find({
+        organizer: req.user._id,
+        refundStatus: 'requested'
+      })
+        .populate('eventId')
+        .populate('attendee', 'firstName lastName email')
+        .sort({ updatedAt: -1 });
+      
+      res.status(200).json({
+        success: true,
+        data: tickets
+      });
+    } catch (error) {
+      console.error('Get organizer refund requests error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to get refund requests',
         error: error.message
       });
     }

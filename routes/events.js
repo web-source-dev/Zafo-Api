@@ -18,13 +18,6 @@ router.get('/', eventController.getEvents);
 router.get('/organizer', authenticate, authorizeOrganizer, eventController.getOrganizerEvents);
 
 /**
- * @route   GET /api/events/counts
- * @desc    Get event counts for the current user
- * @access  Private (Organizer/Admin)
- */
-router.get('/counts', authenticate, authorizeOrganizer, eventController.getEventCounts);
-
-/**
  * @route   GET /api/events/:idOrSlug
  * @desc    Get event by ID or slug
  * @access  Public (with restrictions for non-public events)
