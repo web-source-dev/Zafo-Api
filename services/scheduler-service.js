@@ -60,7 +60,7 @@ class SchedulerService {
    */
   scheduleOrganizerTransfers() {
     // Run daily at 2:00 AM
-    const job = cron.schedule('26 * * * *', async () => {
+    const job = cron.schedule('0 2 * * *', async () => {
       console.log('Running scheduled organizer transfer...');
       try {
         const results = await transferToOrganizers();

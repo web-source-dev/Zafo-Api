@@ -34,6 +34,13 @@ const eventController = {
       // Add organizer (current user) to event data
       eventData.organizer = req.user._id;
       
+      console.log('Creating event with organizer:', req.user._id);
+      console.log('User details:', {
+        _id: req.user._id,
+        email: req.user.email,
+        role: req.user.role
+      });
+      
       // Generate slug if not provided
       if (!eventData.slug && eventData.title) {
         eventData.slug = createSlugFromTitle(eventData.title);
@@ -42,6 +49,8 @@ const eventController = {
       // Create new event
       const event = new Event(eventData);
       await event.save();
+      
+      console.log('Event created successfully with organizer:', event.organizer);
       
       res.status(201).json({
         success: true,
@@ -480,6 +489,93 @@ const eventController = {
       res.status(500).json({
         success: false,
         message: 'Failed to change event status',
+        error: error.message
+      });
+    }
+  },
+
+  /**
+   * Get event statistics (sold tickets, remaining capacity)
+   * @param {Object} req - Request object
+   * @param {Object} res - Response object
+   */
+  getEventStats: async (req, res) => {
+    try {
+      const { idOrSlug } = req.params;
+      
+      // Check if ID is valid ObjectId or slug
+      const isObjectId = mongoose.Types.ObjectId.isValid(idOrSlug);
+      
+      // Build query based on ID or slug
+      const query = isObjectId 
+        ? { _id: idOrSlug } 
+        : { slug: idOrSlug };
+      
+      // Find event
+      const event = await Event.findOne(query);
+      
+      if (!event) {
+        return res.status(404).json({
+          success: false,
+          message: 'Event not found'
+        });
+      }
+      
+      // Get sold tickets count (excluding refunded tickets)
+      const Ticket = require('../models/ticket');
+      const soldTickets = await Ticket.aggregate([
+        {
+          $match: {
+            eventId: event._id,
+            paymentStatus: { $in: ['paid', 'partially_refunded'] }
+          }
+        },
+        {
+          $addFields: {
+            // Calculate actual sold tickets by excluding refunded ones
+            actualSoldTickets: {
+              $reduce: {
+                input: {
+                  $filter: {
+                    input: '$ticketDetails',
+                    cond: { $ne: ['$$this.refundStatus', 'completed'] }
+                  }
+                },
+                initialValue: 0,
+                in: { $add: ['$$value', 1] }
+              }
+            }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalSold: { $sum: '$actualSoldTickets' }
+          }
+        }
+      ]);
+      
+      const soldCount = soldTickets.length > 0 ? soldTickets[0].totalSold : 0;
+      const remainingCapacity = Math.max(0, event.capacity - soldCount);
+
+      console.log(soldCount, remainingCapacity);
+      
+      res.status(200).json({
+        success: true,
+        message: 'Event statistics retrieved successfully',
+        data: {
+          eventId: event._id,
+          totalCapacity: event.capacity,
+          soldTickets: soldCount,
+          remainingCapacity: remainingCapacity,
+          isSoldOut: remainingCapacity === 0
+        }
+      });
+    } catch (error) {
+      console.error('Get event stats error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to retrieve event statistics',
         error: error.message
       });
     }

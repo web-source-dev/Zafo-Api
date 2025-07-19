@@ -13,7 +13,11 @@ const {
   getSchedulerStatus,
   runTransferNow,
   startScheduler,
-  stopScheduler
+  stopScheduler,
+  getOrganizers,
+  getOrganizerStats,
+  toggleOrganizerPaymentBlock,
+  transferToOrganizer
 } = require('../controllers/admin-controller');
 const { authenticate, authorizeAdmin } = require('../middleware/auth');
 
@@ -110,5 +114,33 @@ router.post('/scheduler/start', startScheduler);
  * @access  Private (Admin only)
  */
 router.post('/scheduler/stop', stopScheduler);
+
+/**
+ * @desc    Get all organizers with payment stats
+ * @route   GET /api/admin/organizers
+ * @access  Private (Admin only)
+ */
+router.get('/organizers', getOrganizers);
+
+/**
+ * @desc    Get organizer payment stats
+ * @route   GET /api/admin/organizers/:id/stats
+ * @access  Private (Admin only)
+ */
+router.get('/organizers/:id/stats', getOrganizerStats);
+
+/**
+ * @desc    Block/unblock organizer payments
+ * @route   PUT /api/admin/organizers/:id/payment-block
+ * @access  Private (Admin only)
+ */
+router.put('/organizers/:id/payment-block', toggleOrganizerPaymentBlock);
+
+/**
+ * @desc    Manually transfer payment to organizer
+ * @route   POST /api/admin/organizers/:id/transfer
+ * @access  Private (Admin only)
+ */
+router.post('/organizers/:id/transfer', transferToOrganizer);
 
 module.exports = router; 

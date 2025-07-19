@@ -11,6 +11,20 @@ const { authenticate, authorizeOrganizer } = require('../middleware/auth');
 router.post('/purchase', authenticate, ticketController.createTicketPurchase);
 
 /**
+ * @route   POST /api/tickets/add-to-existing
+ * @desc    Add tickets to existing purchase
+ * @access  Private (Authenticated users)
+ */
+router.post('/add-to-existing', authenticate, ticketController.addTicketsToExistingPurchase);
+
+/**
+ * @route   POST /api/tickets/confirm-additional
+ * @desc    Confirm additional ticket payment and merge with existing ticket
+ * @access  Private (Authenticated users)
+ */
+router.post('/confirm-additional', authenticate, ticketController.confirmAdditionalTicketPayment);
+
+/**
  * @route   POST /api/tickets/:ticketId/confirm
  * @desc    Confirm ticket payment
  * @access  Private (Authenticated users)
@@ -81,5 +95,12 @@ router.get('/refund-requests', authenticate, (req, res, next) => {
  * @access  Private (Organizer/Admin)
  */
 router.get('/organizer/refund-requests', authenticate, authorizeOrganizer, ticketController.getOrganizerRefundRequests);
+
+/**
+ * @route   GET /api/tickets/user/reports
+ * @desc    Get user's comprehensive reports and statistics
+ * @access  Private (Authenticated users)
+ */
+router.get('/user/reports', authenticate, ticketController.getUserReports);
 
 module.exports = router; 

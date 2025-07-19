@@ -4,7 +4,9 @@ const {
   register, 
   login, 
   getCurrentUser, 
-  updateProfile 
+  updateProfile,
+  changePassword,
+  deleteAccount
 } = require('../controllers/auth-controller');
 const { authenticate } = require('../middleware/auth');
 
@@ -37,6 +39,20 @@ router.get('/me', authenticate, getCurrentUser);
 router.put('/me', authenticate, updateProfile);
 
 /**
+ * @desc    Change user password
+ * @route   POST /api/auth/change-password
+ * @access  Private (requires authentication)
+ */
+router.post('/change-password', authenticate, changePassword);
+
+/**
+ * @desc    Delete user account
+ * @route   DELETE /api/auth/delete-account
+ * @access  Private (requires authentication)
+ */
+router.delete('/delete-account', authenticate, deleteAccount);
+
+/**
  * @desc    Verify token (useful for frontend to check token validity)
  * @route   GET /api/auth/verify
  * @access  Private (requires authentication)
@@ -50,6 +66,7 @@ router.get('/verify', authenticate, (req, res) => {
       email: req.user.email,
       firstName: req.user.firstName,
       lastName: req.user.lastName,
+      phone: req.user.phone,
       role: req.user.role
     }
   });

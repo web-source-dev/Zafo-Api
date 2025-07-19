@@ -34,12 +34,21 @@ const paymentController = {
       }
       
       // Verify that the current user is the event organizer
+      console.log('Payment authorization check:');
+      console.log('User ID:', req.user._id.toString());
+      console.log('Event Organizer ID:', event.organizer.toString());
+      console.log('User Role:', req.user.role);
+      console.log('IDs match:', req.user._id.toString() === event.organizer.toString());
+      
       if (req.user._id.toString() !== event.organizer.toString() && req.user.role !== 'admin') {
+        console.log('Authorization failed - user not authorized to pay for this event');
         return res.status(403).json({
           success: false,
           message: 'You are not authorized to pay for this event'
         });
       }
+      
+      console.log('Authorization successful - proceeding with payment');
       
       // Check if the event is already paid
       if (event.isPaid) {

@@ -495,6 +495,419 @@ const stopScheduler = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Get all organizers with payment stats
+ * @route   GET /api/admin/organizers
+ * @access  Private (Admin only)
+ */
+const getOrganizers = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, search, status } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // First, find all users who have sold tickets (organizers)
+    const Ticket = require('../models/ticket');
+    
+    // Get all unique organizer IDs from tickets
+    const organizerIds = await Ticket.distinct('organizer');
+    
+    if (organizerIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          organizers: [],
+          total: 0,
+          page: parseInt(page),
+          pages: 0
+        }
+      });
+    }
+    
+    // Build query filters for users who are organizers
+    const filter = { _id: { $in: organizerIds } };
+    
+    if (search) {
+      filter.$or = [
+        { email: { $regex: search, $options: 'i' } },
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    if (status === 'active') {
+      filter.isActive = true;
+    } else if (status === 'inactive') {
+      filter.isActive = false;
+    }
+    
+    // Execute query with pagination
+    const organizers = await User.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+    
+    // Get total count for pagination
+    const total = await User.countDocuments(filter);
+    
+    // Get payment stats for each organizer
+    const organizersWithStats = await Promise.all(
+      organizers.map(async (organizer) => {
+        const tickets = await Ticket.find({ organizer: organizer._id });
+        
+        const stats = {
+          totalTickets: tickets.length,
+          totalRevenue: 0,
+          platformFees: 0,
+          organizerPayments: 0,
+          pendingTransfers: 0,
+          completedTransfers: 0,
+          failedTransfers: 0,
+          totalSent: 0,
+          totalRemaining: 0,
+          hasStripeAccount: !!organizer.stripeCustomerId,
+          transferStatus: 'none' // none, available, blocked, no_stripe
+        };
+        
+        tickets.forEach(ticket => {
+          if (ticket.paymentStatus === 'paid') {
+            stats.totalRevenue += ticket.ticketPrice;
+            stats.platformFees += ticket.platformFee;
+            stats.organizerPayments += ticket.organizerPayment;
+            
+            if (ticket.organizerTransferStatus === 'pending') {
+              stats.pendingTransfers++;
+              stats.totalRemaining += ticket.organizerPayment;
+            } else if (ticket.organizerTransferStatus === 'completed') {
+              stats.completedTransfers++;
+              stats.totalSent += ticket.organizerPayment;
+            } else if (ticket.organizerTransferStatus === 'failed') {
+              stats.failedTransfers++;
+              stats.totalRemaining += ticket.organizerPayment;
+            }
+          }
+        });
+        
+        // Determine transfer status
+        if (organizer.isPaymentBlocked) {
+          stats.transferStatus = 'blocked';
+        } else if (!organizer.stripeCustomerId) {
+          stats.transferStatus = 'no_stripe';
+        } else if (stats.totalRemaining > 0) {
+          stats.transferStatus = 'available';
+        }
+        
+        return {
+          ...organizer.toObject(),
+          paymentStats: stats
+        };
+      })
+    );
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        organizers: organizersWithStats,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    console.error('Get organizers error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get organizers',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * @desc    Get organizer payment stats
+ * @route   GET /api/admin/organizers/:id/stats
+ * @access  Private (Admin only)
+ */
+const getOrganizerStats = async (req, res) => {
+  try {
+    const organizer = await User.findById(req.params.id);
+    
+    if (!organizer || organizer.role !== 'organizer') {
+      return res.status(404).json({
+        success: false,
+        message: 'Organizer not found'
+      });
+    }
+    
+    const Ticket = require('../models/ticket');
+    const tickets = await Ticket.find({ organizer: organizer._id })
+      .populate('eventId');
+    
+    const stats = {
+      totalTickets: tickets.length,
+      totalRevenue: 0,
+      platformFees: 0,
+      organizerPayments: 0,
+      pendingTransfers: 0,
+      completedTransfers: 0,
+      failedTransfers: 0,
+      totalSent: 0,
+      totalRemaining: 0,
+      recentTickets: []
+    };
+    
+    tickets.forEach(ticket => {
+      if (ticket.paymentStatus === 'paid') {
+        stats.totalRevenue += ticket.ticketPrice;
+        stats.platformFees += ticket.platformFee;
+        stats.organizerPayments += ticket.organizerPayment;
+        
+        if (ticket.organizerTransferStatus === 'pending') {
+          stats.pendingTransfers++;
+          stats.totalRemaining += ticket.organizerPayment;
+        } else if (ticket.organizerTransferStatus === 'completed') {
+          stats.completedTransfers++;
+          stats.totalSent += ticket.organizerPayment;
+        } else if (ticket.organizerTransferStatus === 'failed') {
+          stats.failedTransfers++;
+          stats.totalRemaining += ticket.organizerPayment;
+        }
+      }
+    });
+    
+    // Get recent tickets for this organizer
+    stats.recentTickets = tickets
+      .filter(ticket => ticket.paymentStatus === 'paid')
+      .sort((a, b) => new Date(b.purchasedAt) - new Date(a.purchasedAt))
+      .slice(0, 10)
+      .map(ticket => ({
+        id: ticket._id,
+        eventTitle: ticket.eventId.title,
+        ticketPrice: ticket.ticketPrice,
+        organizerPayment: ticket.organizerPayment,
+        transferStatus: ticket.organizerTransferStatus,
+        purchasedAt: ticket.purchasedAt
+      }));
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        organizer,
+        stats
+      }
+    });
+  } catch (error) {
+    console.error('Get organizer stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get organizer stats',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * @desc    Block/unblock organizer payments
+ * @route   PUT /api/admin/organizers/:id/payment-block
+ * @access  Private (Admin only)
+ */
+const toggleOrganizerPaymentBlock = async (req, res) => {
+  try {
+    const { isBlocked, reason } = req.body;
+    
+    const organizer = await User.findById(req.params.id);
+    
+    if (!organizer || organizer.role !== 'organizer') {
+      return res.status(404).json({
+        success: false,
+        message: 'Organizer not found'
+      });
+    }
+    
+    organizer.isPaymentBlocked = isBlocked;
+    organizer.paymentBlockReason = isBlocked ? reason : null;
+    organizer.paymentBlockedAt = isBlocked ? new Date() : null;
+    
+    await organizer.save();
+    
+    res.status(200).json({
+      success: true,
+      message: `Organizer payments ${isBlocked ? 'blocked' : 'unblocked'} successfully`,
+      data: organizer
+    });
+  } catch (error) {
+    console.error('Toggle organizer payment block error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update organizer payment block status',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * @desc    Manually transfer payment to organizer
+ * @route   POST /api/admin/organizers/:id/transfer
+ * @access  Private (Admin only)
+ */
+const transferToOrganizer = async (req, res) => {
+  try {
+    const organizer = await User.findById(req.params.id);
+    
+    if (!organizer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Organizer not found'
+      });
+    }
+    
+    // Check if organizer has Stripe account
+    if (!organizer.stripeCustomerId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Organizer does not have a Stripe account set up. They need to complete Stripe Connect onboarding first.',
+        code: 'NO_STRIPE_ACCOUNT'
+      });
+    }
+    
+    // Check if payments are blocked
+    if (organizer.isPaymentBlocked) {
+      return res.status(400).json({
+        success: false,
+        message: `Payments are blocked for this organizer. Reason: ${organizer.paymentBlockReason || 'No reason provided'}`,
+        code: 'PAYMENTS_BLOCKED'
+      });
+    }
+    
+    const Ticket = require('../models/ticket');
+    const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+    
+    // Find pending transfers for this organizer
+    const pendingTickets = await Ticket.find({
+      organizer: organizer._id,
+      paymentStatus: 'paid',
+      organizerTransferStatus: 'pending'
+    }).populate('eventId');
+    
+    const completedEvents = pendingTickets.filter(ticket => {
+      return new Date(ticket.eventId.endDate) < new Date();
+    });
+    
+    if (completedEvents.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No pending transfers found for this organizer. All events must be completed before transfers can be processed.',
+        code: 'NO_PENDING_TRANSFERS'
+      });
+    }
+    
+    const transferResults = [];
+    let totalAmount = 0;
+    let successCount = 0;
+    let failureCount = 0;
+    
+    for (const ticket of completedEvents) {
+      try {
+        totalAmount += ticket.organizerPayment;
+        
+        // Create transfer to organizer
+        const transfer = await stripe.transfers.create({
+          amount: Math.round(ticket.organizerPayment * 100), // Convert to cents
+          currency: ticket.currency.toLowerCase(),
+          destination: organizer.stripeCustomerId,
+          metadata: {
+            ticketId: ticket._id.toString(),
+            eventId: ticket.eventId._id.toString(),
+            organizerId: organizer._id.toString()
+          }
+        });
+        
+        // Update ticket transfer status
+        ticket.organizerTransferStatus = 'completed';
+        ticket.stripeTransferId = transfer.id;
+        ticket.organizerTransferDate = new Date();
+        await ticket.save();
+        
+        transferResults.push({
+          ticketId: ticket._id,
+          status: 'completed',
+          transferId: transfer.id,
+          amount: ticket.organizerPayment,
+          message: 'Payment sent successfully'
+        });
+        
+        successCount++;
+        
+      } catch (transferError) {
+        console.error(`Transfer failed for ticket ${ticket._id}:`, transferError);
+        
+        let errorMessage = 'Transfer failed';
+        let errorCode = 'TRANSFER_FAILED';
+        
+        // Handle specific Stripe errors
+        if (transferError.code === 'insufficient_funds') {
+          errorMessage = 'Insufficient funds in platform account';
+          errorCode = 'INSUFFICIENT_FUNDS';
+        } else if (transferError.code === 'account_invalid') {
+          errorMessage = 'Organizer Stripe account is invalid or incomplete';
+          errorCode = 'INVALID_ACCOUNT';
+        } else if (transferError.code === 'currency_not_supported') {
+          errorMessage = 'Currency not supported for transfer';
+          errorCode = 'CURRENCY_NOT_SUPPORTED';
+        } else if (transferError.code === 'amount_too_small') {
+          errorMessage = 'Transfer amount is too small';
+          errorCode = 'AMOUNT_TOO_SMALL';
+        } else if (transferError.code === 'amount_too_large') {
+          errorMessage = 'Transfer amount exceeds limits';
+          errorCode = 'AMOUNT_TOO_LARGE';
+        }
+        
+        // Mark transfer as failed
+        ticket.organizerTransferStatus = 'failed';
+        await ticket.save();
+        
+        transferResults.push({
+          ticketId: ticket._id,
+          status: 'failed',
+          error: errorMessage,
+          code: errorCode,
+          amount: ticket.organizerPayment
+        });
+        
+        failureCount++;
+      }
+    }
+    
+    // Determine overall success message
+    let overallMessage = '';
+    if (successCount > 0 && failureCount === 0) {
+      overallMessage = `Payment sent successfully! Transferred CHF ${totalAmount.toFixed(2)} to ${organizer.firstName} ${organizer.lastName}`;
+    } else if (successCount > 0 && failureCount > 0) {
+      overallMessage = `Partial success: ${successCount} transfers completed, ${failureCount} failed. Total sent: CHF ${(totalAmount * successCount / completedEvents.length).toFixed(2)}`;
+    } else {
+      overallMessage = `All transfers failed. Please check the error details below.`;
+    }
+    
+    res.status(200).json({
+      success: successCount > 0,
+      message: overallMessage,
+      data: {
+        totalProcessed: completedEvents.length,
+        successCount,
+        failureCount,
+        totalAmount: totalAmount.toFixed(2),
+        results: transferResults
+      }
+    });
+  } catch (error) {
+    console.error('Transfer to organizer error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to process transfer due to server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = {
   getStats,
   getSystemStatus,
@@ -508,5 +921,9 @@ module.exports = {
   getSchedulerStatus,
   runTransferNow,
   startScheduler,
-  stopScheduler
+  stopScheduler,
+  getOrganizers,
+  getOrganizerStats,
+  toggleOrganizerPaymentBlock,
+  transferToOrganizer
 }; 

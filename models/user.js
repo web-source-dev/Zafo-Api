@@ -26,6 +26,11 @@ const userSchema = new mongoose.Schema({
     required: [true, 'Last name is required'],
     trim: true
   },
+  phone: {
+    type: String,
+    trim: true,
+    default: null
+  },
   role: {
     type: String,
     enum: ['user', 'admin', 'organizer'],
@@ -37,6 +42,19 @@ const userSchema = new mongoose.Schema({
   },
   stripeCustomerId: {
     type: String,
+    default: null
+  },
+  // Payment blocking for organizers
+  isPaymentBlocked: {
+    type: Boolean,
+    default: false
+  },
+  paymentBlockReason: {
+    type: String,
+    default: null
+  },
+  paymentBlockedAt: {
+    type: Date,
     default: null
   },
   createdAt: {

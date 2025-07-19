@@ -41,7 +41,7 @@ const ticketSchema = new mongoose.Schema({
       required: [true, 'Attendee email is required']
     },
     ticketNumber: {
-      type: Number,
+      type: String,
       required: [true, 'Ticket number is required']
     },
     // New fields for partial refund support
@@ -154,6 +154,8 @@ ticketSchema.index({ eventId: 1, attendee: 1 });
 ticketSchema.index({ organizer: 1 });
 ticketSchema.index({ paymentStatus: 1 });
 ticketSchema.index({ organizerTransferStatus: 1 });
+// Unique index on ticket numbers to prevent duplicates
+ticketSchema.index({ 'ticketDetails.ticketNumber': 1 }, { unique: true, sparse: true });
 
 // Virtual for total amount
 ticketSchema.virtual('totalAmount').get(function() {
@@ -201,6 +203,156 @@ ticketSchema.methods.calculatePartialRefundAmount = function(ticketNumbers) {
   const cancellationFee = refundableTickets.length * 2.50; // 2.50 CHF per ticket
   
   return Math.max(0, totalRefundAmount - cancellationFee);
+};
+
+// Method to get active (non-refunded) tickets count
+ticketSchema.methods.getActiveTicketsCount = function() {
+  return this.ticketDetails.filter(detail => detail.refundStatus !== 'completed').length;
+};
+
+// Method to update quantity based on active tickets
+ticketSchema.methods.updateQuantityFromActiveTickets = function() {
+  this.quantity = this.getActiveTicketsCount();
+  return this.quantity;
+};
+
+// Method to get refunded tickets count
+ticketSchema.methods.getRefundedTicketsCount = function() {
+  return this.ticketDetails.filter(detail => detail.refundStatus === 'completed').length;
+};
+
+// Pre-save hook to ensure ticket numbers are generated
+ticketSchema.pre('save', async function(next) {
+  try {
+    // Only generate ticket numbers if they don't exist
+    if (this.ticketDetails && this.ticketDetails.length > 0) {
+      for (let i = 0; i < this.ticketDetails.length; i++) {
+        const detail = this.ticketDetails[i];
+        if (!detail.ticketNumber || detail.ticketNumber.trim() === '') {
+          // Generate a single ticket number
+          const ticketNumber = await this.constructor.generateTicketNumber(this.eventId, 'Event');
+          detail.ticketNumber = ticketNumber;
+        }
+      }
+    }
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Static method to generate unique ticket number for an event
+ticketSchema.statics.generateTicketNumber = async function(eventId, eventTitle) {
+  try {
+    // Validate inputs
+    if (!eventId || !eventTitle) {
+      throw new Error('Event ID and title are required');
+    }
+    
+  // Get the first 2 letters of the event title (case insensitive)
+    const eventPrefix = eventTitle.substring(0, 2).toLowerCase().replace(/[^a-z]/g, '');
+    
+    // Fallback if event title is too short or contains no letters
+    if (!eventPrefix || eventPrefix.length < 2) {
+      const eventPrefix = 'ev';
+    }
+  
+  // Find the highest ticket number for this event
+  const highestTicket = await this.findOne(
+    { 
+      eventId: eventId,
+      'ticketDetails.ticketNumber': { $regex: `^${eventPrefix}_` }
+    },
+    { 'ticketDetails.ticketNumber': 1 }
+  ).sort({ 'ticketDetails.ticketNumber': -1 });
+  
+  let nextNumber = 1;
+  
+  if (highestTicket && highestTicket.ticketDetails.length > 0) {
+    // Extract the highest number from existing tickets
+    const ticketNumbers = highestTicket.ticketDetails
+      .map(detail => detail.ticketNumber)
+        .filter(number => number && number.startsWith(eventPrefix + '_'))
+      .map(number => {
+        const numPart = number.split('_')[1];
+        return parseInt(numPart) || 0;
+      });
+    
+    if (ticketNumbers.length > 0) {
+      nextNumber = Math.max(...ticketNumbers) + 1;
+    }
+  }
+  
+  return `${eventPrefix}_${nextNumber}`;
+  } catch (error) {
+    console.error('Error generating ticket number:', error);
+    // Fallback ticket number generation
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 1000);
+    return `tk_${timestamp}_${random}`;
+  }
+};
+
+// Static method to generate multiple ticket numbers for an event
+ticketSchema.statics.generateTicketNumbers = async function(eventId, eventTitle, quantity) {
+  try {
+    // Validate inputs
+    if (!eventId || !eventTitle || !quantity || quantity < 1) {
+      throw new Error('Event ID, title, and valid quantity are required');
+    }
+    
+  // Get the first 2 letters of the event title (case insensitive)
+    const eventPrefix = eventTitle.substring(0, 2).toLowerCase().replace(/[^a-z]/g, '');
+    
+    // Fallback if event title is too short or contains no letters
+    if (!eventPrefix || eventPrefix.length < 2) {
+      const eventPrefix = 'ev';
+    }
+  
+  // Find all existing ticket numbers for this event
+  const existingTickets = await this.find(
+    { 
+      eventId: eventId,
+      'ticketDetails.ticketNumber': { $regex: `^${eventPrefix}_` }
+    },
+    { 'ticketDetails.ticketNumber': 1 }
+  );
+  
+  // Extract all existing ticket numbers
+  const existingNumbers = [];
+  existingTickets.forEach(ticket => {
+    ticket.ticketDetails.forEach(detail => {
+        if (detail.ticketNumber && detail.ticketNumber.startsWith(eventPrefix + '_')) {
+        const numPart = detail.ticketNumber.split('_')[1];
+        const number = parseInt(numPart);
+        if (!isNaN(number)) {
+          existingNumbers.push(number);
+        }
+      }
+    });
+  });
+  
+  // Find the highest number
+  const highestNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) : 0;
+  
+  // Generate new ticket numbers
+  const ticketNumbers = [];
+  for (let i = 1; i <= quantity; i++) {
+    ticketNumbers.push(`${eventPrefix}_${highestNumber + i}`);
+  }
+  
+  return ticketNumbers;
+  } catch (error) {
+    console.error('Error generating ticket numbers:', error);
+    // Fallback ticket number generation
+    const ticketNumbers = [];
+    const timestamp = Date.now();
+    for (let i = 0; i < quantity; i++) {
+      const random = Math.floor(Math.random() * 1000);
+      ticketNumbers.push(`tk_${timestamp}_${random}_${i}`);
+    }
+    return ticketNumbers;
+  }
 };
 
 const Ticket = mongoose.model('Ticket', ticketSchema);

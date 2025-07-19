@@ -46,6 +46,17 @@ async function transferToOrganizers() {
           continue;
         }
         
+        // Check if organizer payments are blocked
+        if (ticket.organizer.isPaymentBlocked) {
+          console.log(`Organizer ${ticket.organizer._id} has payments blocked - skipping`);
+          transferResults.push({
+            ticketId: ticket._id,
+            status: 'skipped',
+            reason: 'Organizer payments are blocked'
+          });
+          continue;
+        }
+        
         // Create transfer to organizer
         const transfer = await stripe.transfers.create({
           amount: Math.round(ticket.organizerPayment * 100), // Convert to cents
@@ -93,7 +104,6 @@ async function transferToOrganizers() {
     
     // Disconnect from MongoDB
     await mongoose.disconnect();
-    console.log('Disconnected from MongoDB');
     
     return transferResults;
     

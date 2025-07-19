@@ -25,6 +25,13 @@ router.get('/organizer', authenticate, authorizeOrganizer, eventController.getOr
 router.get('/:idOrSlug', eventController.getEvent);
 
 /**
+ * @route   GET /api/events/:idOrSlug/stats
+ * @desc    Get event statistics (sold tickets, remaining capacity)
+ * @access  Public
+ */
+router.get('/:idOrSlug/stats', eventController.getEventStats);
+
+/**
  * @route   POST /api/events
  * @desc    Create a new event
  * @access  Private (Organizer/Admin)

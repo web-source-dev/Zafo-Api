@@ -29,7 +29,6 @@ mongoose.connect(MONGODB_URI)
   .then(() => console.log('MongoDB connected'))
   .catch(err => {
     console.error('MongoDB connection error:', err);
-    process.exit(1);
   });
 
 // Routes
@@ -39,6 +38,7 @@ const adminRoutes = require('./routes/admin');
 const paymentRoutes = require('./routes/payments');
 const ticketRoutes = require('./routes/tickets');
 const organizerRoutes = require('./routes/organizer');
+const userRoutes = require('./routes/user');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);
@@ -46,6 +46,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/organizer', organizerRoutes);
+app.use('/api/user', userRoutes);
 // Basic route
 app.get('/', (req, res) => {
   res.json({ message: 'Welcome to Zafo API' });

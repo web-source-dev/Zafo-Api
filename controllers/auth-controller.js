@@ -36,6 +36,7 @@ const register = async (req, res) => {
       email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
+      phone: user.phone,
       role: user.role
     };
 
@@ -107,6 +108,7 @@ const login = async (req, res) => {
       email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
+      phone: user.phone,
       role: user.role
     };
 
@@ -143,6 +145,7 @@ const getCurrentUser = async (req, res) => {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
+        phone: user.phone,
         role: user.role,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
@@ -165,7 +168,7 @@ const getCurrentUser = async (req, res) => {
  */
 const updateProfile = async (req, res) => {
   try {
-    const { firstName, lastName } = req.body;
+    const { firstName, lastName, phone } = req.body;
     const userId = req.user._id;
 
     // Update user
@@ -174,6 +177,7 @@ const updateProfile = async (req, res) => {
       { 
         firstName: firstName || req.user.firstName,
         lastName: lastName || req.user.lastName,
+        phone: phone || req.user.phone,
       },
       { new: true, runValidators: true }
     );
@@ -193,6 +197,7 @@ const updateProfile = async (req, res) => {
         email: updatedUser.email,
         firstName: updatedUser.firstName,
         lastName: updatedUser.lastName,
+        phone: updatedUser.phone,
         role: updatedUser.role
       }
     });
@@ -206,9 +211,120 @@ const updateProfile = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Change user password
+ * @route   POST /api/auth/change-password
+ * @access  Private
+ */
+const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const userId = req.user._id;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password and new password are required'
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be at least 6 characters long'
+      });
+    }
+
+    // Find user with password
+    const user = await User.findById(userId).select('+password');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Verify current password
+    const isCurrentPasswordValid = await user.matchPassword(currentPassword);
+    if (!isCurrentPasswordValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password is incorrect'
+      });
+    }
+
+    // Update password
+    user.password = newPassword;
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Password changed successfully'
+    });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Password change failed. Please try again later.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * @desc    Delete user account
+ * @route   DELETE /api/auth/delete-account
+ * @access  Private
+ */
+const deleteAccount = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // Find user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check if user has any active tickets or events
+    const Ticket = require('../models/ticket');
+    const Event = require('../models/event');
+
+    const userTickets = await Ticket.find({ attendee: userId });
+    const userEvents = await Event.find({ organizer: userId });
+
+    if (userTickets.length > 0 || userEvents.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete account with active tickets or events. Please contact support.'
+      });
+    }
+
+    // Delete user
+    await User.findByIdAndDelete(userId);
+
+    res.status(200).json({
+      success: true,
+      message: 'Account deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete account error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Account deletion failed. Please try again later.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = {
   register,
   login,
   getCurrentUser,
-  updateProfile
+  updateProfile,
+  changePassword,
+  deleteAccount
 };
