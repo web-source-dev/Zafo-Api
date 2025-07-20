@@ -432,12 +432,13 @@ const getSchedulerStatus = async (req, res) => {
  */
 const runTransferNow = async (req, res) => {
   try {
-    const results = await schedulerService.runTransferNow();
+    // Admin manual transfer - include published and completed events
+    const results = await schedulerService.runTransferNow(true);
     
     res.status(200).json({
       success: true,
       data: results,
-      message: 'Transfer completed successfully'
+      message: 'Manual transfer completed successfully'
     });
   } catch (error) {
     console.error('Run transfer error:', error);
@@ -505,26 +506,16 @@ const getOrganizers = async (req, res) => {
     const { page = 1, limit = 10, search, status } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
-    // First, find all users who have sold tickets (organizers)
     const Ticket = require('../models/ticket');
     
-    // Get all unique organizer IDs from tickets
-    const organizerIds = await Ticket.distinct('organizer');
+    console.log('Admin getOrganizers called with:', { page, limit, search, status });
     
-    if (organizerIds.length === 0) {
-      return res.status(200).json({
-        success: true,
-        data: {
-          organizers: [],
-          total: 0,
-          page: parseInt(page),
-          pages: 0
-        }
-      });
-    }
-    
-    // Build query filters for users who are organizers
-    const filter = { _id: { $in: organizerIds } };
+    // Build query filters for users who are organizers (have organizer role OR have sold tickets)
+    const filter = {
+      $or: [
+        { role: 'organizer' },
+      ]
+    };
     
     if (search) {
       filter.$or = [
@@ -546,8 +537,12 @@ const getOrganizers = async (req, res) => {
       .skip(skip)
       .limit(parseInt(limit));
     
+    console.log('Found organizers:', organizers.length);
+    
     // Get total count for pagination
     const total = await User.countDocuments(filter);
+    
+    console.log('Total organizers count:', total);
     
     // Get payment stats for each organizer
     const organizersWithStats = await Promise.all(
@@ -555,7 +550,7 @@ const getOrganizers = async (req, res) => {
         const tickets = await Ticket.find({ organizer: organizer._id });
         
         const stats = {
-          totalTickets: tickets.length,
+          totalTickets: 0, // Initialize to 0, will be calculated based on actual tickets
           totalRevenue: 0,
           platformFees: 0,
           organizerPayments: 0,
@@ -568,21 +563,62 @@ const getOrganizers = async (req, res) => {
           transferStatus: 'none' // none, available, blocked, no_stripe
         };
         
+        // Calculate stats from tickets
         tickets.forEach(ticket => {
-          if (ticket.paymentStatus === 'paid') {
-            stats.totalRevenue += ticket.ticketPrice;
-            stats.platformFees += ticket.platformFee;
-            stats.organizerPayments += ticket.organizerPayment;
-            
-            if (ticket.organizerTransferStatus === 'pending') {
-              stats.pendingTransfers++;
-              stats.totalRemaining += ticket.organizerPayment;
-            } else if (ticket.organizerTransferStatus === 'completed') {
-              stats.completedTransfers++;
-              stats.totalSent += ticket.organizerPayment;
-            } else if (ticket.organizerTransferStatus === 'failed') {
-              stats.failedTransfers++;
-              stats.totalRemaining += ticket.organizerPayment;
+          // Include paid tickets and partially refunded tickets
+          if (ticket.paymentStatus === 'paid' || ticket.paymentStatus === 'partially_refunded') {
+            // For partially refunded tickets, calculate based on active attendee tickets
+            if (ticket.paymentStatus === 'partially_refunded' && ticket.ticketDetails) {
+              const activeTickets = ticket.ticketDetails.filter(detail => detail.refundStatus !== 'completed');
+              const refundedTickets = ticket.ticketDetails.filter(detail => detail.refundStatus === 'completed');
+              
+              if (activeTickets.length > 0) {
+                // Calculate amounts for active tickets only
+                const pricePerTicket = ticket.ticketPrice / ticket.quantity;
+                const platformFeePerTicket = ticket.platformFee / ticket.quantity;
+                const organizerPaymentPerTicket = ticket.organizerPayment / ticket.quantity;
+                
+                const activeTicketPrice = activeTickets.length * pricePerTicket;
+                const activePlatformFee = activeTickets.length * platformFeePerTicket;
+                const activeOrganizerPayment = activeTickets.length * organizerPaymentPerTicket;
+                
+                stats.totalRevenue += activeTicketPrice;
+                stats.platformFees += activePlatformFee;
+                stats.organizerPayments += activeOrganizerPayment;
+                
+                // Count active tickets only (not the total quantity)
+                stats.totalTickets += activeTickets.length;
+                
+                // Handle transfer status for active tickets
+                if (ticket.organizerTransferStatus === 'pending') {
+                  stats.pendingTransfers++;
+                  stats.totalRemaining += activeOrganizerPayment;
+                } else if (ticket.organizerTransferStatus === 'completed') {
+                  stats.completedTransfers++;
+                  stats.totalSent += activeOrganizerPayment;
+                } else if (ticket.organizerTransferStatus === 'failed') {
+                  stats.failedTransfers++;
+                  stats.totalRemaining += activeOrganizerPayment;
+                }
+              }
+            } else {
+              // For fully paid tickets, use the full amounts
+              stats.totalRevenue += ticket.ticketPrice;
+              stats.platformFees += ticket.platformFee;
+              stats.organizerPayments += ticket.organizerPayment;
+              // Count total tickets for fully paid tickets
+              stats.totalTickets += ticket.quantity;
+              
+              if (ticket.organizerTransferStatus === 'pending') {
+                stats.pendingTransfers++;
+                stats.totalRemaining += ticket.organizerPayment;
+              } else if (ticket.organizerTransferStatus === 'completed') {
+                stats.completedTransfers++;
+                stats.totalSent += ticket.organizerPayment;
+              } else if (ticket.organizerTransferStatus === 'failed') {
+                stats.failedTransfers++;
+                stats.totalRemaining += ticket.organizerPayment;
+              }
             }
           }
         });
@@ -643,7 +679,7 @@ const getOrganizerStats = async (req, res) => {
       .populate('eventId');
     
     const stats = {
-      totalTickets: tickets.length,
+      totalTickets: 0, // Initialize to 0, will be calculated based on actual tickets
       totalRevenue: 0,
       platformFees: 0,
       organizerPayments: 0,
@@ -656,37 +692,95 @@ const getOrganizerStats = async (req, res) => {
     };
     
     tickets.forEach(ticket => {
-      if (ticket.paymentStatus === 'paid') {
-        stats.totalRevenue += ticket.ticketPrice;
-        stats.platformFees += ticket.platformFee;
-        stats.organizerPayments += ticket.organizerPayment;
-        
-        if (ticket.organizerTransferStatus === 'pending') {
-          stats.pendingTransfers++;
-          stats.totalRemaining += ticket.organizerPayment;
-        } else if (ticket.organizerTransferStatus === 'completed') {
-          stats.completedTransfers++;
-          stats.totalSent += ticket.organizerPayment;
-        } else if (ticket.organizerTransferStatus === 'failed') {
-          stats.failedTransfers++;
-          stats.totalRemaining += ticket.organizerPayment;
+      // Include paid tickets and partially refunded tickets
+      if (ticket.paymentStatus === 'paid' || ticket.paymentStatus === 'partially_refunded') {
+        // For partially refunded tickets, calculate based on active attendee tickets
+        if (ticket.paymentStatus === 'partially_refunded' && ticket.ticketDetails) {
+          const activeTickets = ticket.ticketDetails.filter(detail => detail.refundStatus !== 'completed');
+          const refundedTickets = ticket.ticketDetails.filter(detail => detail.refundStatus === 'completed');
+          
+          if (activeTickets.length > 0) {
+            // Calculate amounts for active tickets only
+            const pricePerTicket = ticket.ticketPrice / ticket.quantity;
+            const platformFeePerTicket = ticket.platformFee / ticket.quantity;
+            const organizerPaymentPerTicket = ticket.organizerPayment / ticket.quantity;
+            
+            const activeTicketPrice = activeTickets.length * pricePerTicket;
+            const activePlatformFee = activeTickets.length * platformFeePerTicket;
+            const activeOrganizerPayment = activeTickets.length * organizerPaymentPerTicket;
+            
+            stats.totalRevenue += activeTicketPrice;
+            stats.platformFees += activePlatformFee;
+            stats.organizerPayments += activeOrganizerPayment;
+            stats.totalTickets += activeTickets.length;
+            
+            // Handle transfer status for active tickets
+            if (ticket.organizerTransferStatus === 'pending') {
+              stats.pendingTransfers++;
+              stats.totalRemaining += activeOrganizerPayment;
+            } else if (ticket.organizerTransferStatus === 'completed') {
+              stats.completedTransfers++;
+              stats.totalSent += activeOrganizerPayment;
+            } else if (ticket.organizerTransferStatus === 'failed') {
+              stats.failedTransfers++;
+              stats.totalRemaining += activeOrganizerPayment;
+            }
+          }
+        } else {
+          // For fully paid tickets, use the full amounts
+          stats.totalRevenue += ticket.ticketPrice;
+          stats.platformFees += ticket.platformFee;
+          stats.organizerPayments += ticket.organizerPayment;
+          stats.totalTickets += ticket.quantity;
+          
+          if (ticket.organizerTransferStatus === 'pending') {
+            stats.pendingTransfers++;
+            stats.totalRemaining += ticket.organizerPayment;
+          } else if (ticket.organizerTransferStatus === 'completed') {
+            stats.completedTransfers++;
+            stats.totalSent += ticket.organizerPayment;
+          } else if (ticket.organizerTransferStatus === 'failed') {
+            stats.failedTransfers++;
+            stats.totalRemaining += ticket.organizerPayment;
+          }
         }
       }
     });
     
     // Get recent tickets for this organizer
     stats.recentTickets = tickets
-      .filter(ticket => ticket.paymentStatus === 'paid')
+      .filter(ticket => ticket.paymentStatus === 'paid' || ticket.paymentStatus === 'partially_refunded')
       .sort((a, b) => new Date(b.purchasedAt) - new Date(a.purchasedAt))
       .slice(0, 10)
-      .map(ticket => ({
-        id: ticket._id,
-        eventTitle: ticket.eventId.title,
-        ticketPrice: ticket.ticketPrice,
-        organizerPayment: ticket.organizerPayment,
-        transferStatus: ticket.organizerTransferStatus,
-        purchasedAt: ticket.purchasedAt
-      }));
+      .map(ticket => {
+        let ticketPrice = ticket.ticketPrice;
+        let organizerPayment = ticket.organizerPayment;
+        let quantity = ticket.quantity;
+        
+        // For partially refunded tickets, calculate based on active tickets
+        if (ticket.paymentStatus === 'partially_refunded' && ticket.ticketDetails) {
+          const activeTickets = ticket.ticketDetails.filter(detail => detail.refundStatus !== 'completed');
+          if (activeTickets.length > 0) {
+            const pricePerTicket = ticket.ticketPrice / ticket.quantity;
+            const organizerPaymentPerTicket = ticket.organizerPayment / ticket.quantity;
+            
+            ticketPrice = activeTickets.length * pricePerTicket;
+            organizerPayment = activeTickets.length * organizerPaymentPerTicket;
+            quantity = activeTickets.length;
+          }
+        }
+        
+        return {
+          id: ticket._id,
+          eventTitle: ticket.eventId.title,
+          ticketPrice: ticketPrice,
+          organizerPayment: organizerPayment,
+          quantity: quantity,
+          transferStatus: ticket.organizerTransferStatus,
+          purchasedAt: ticket.purchasedAt,
+          paymentStatus: ticket.paymentStatus
+        };
+      });
     
     res.status(200).json({
       success: true,
@@ -781,22 +875,26 @@ const transferToOrganizer = async (req, res) => {
     const Ticket = require('../models/ticket');
     const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
     
-    // Find pending transfers for this organizer
+    // Find pending transfers for this organizer (including partially refunded tickets)
     const pendingTickets = await Ticket.find({
       organizer: organizer._id,
-      paymentStatus: 'paid',
+      paymentStatus: { $in: ['paid', 'partially_refunded'] },
       organizerTransferStatus: 'pending'
     }).populate('eventId');
     
-    const completedEvents = pendingTickets.filter(ticket => {
-      return new Date(ticket.eventId.endDate) < new Date();
+    // Filter for events that are published or completed (admin manual transfer)
+    const eligibleEvents = pendingTickets.filter(ticket => {
+      return ticket.eventId.status === 'published' || ticket.eventId.status === 'completed';
     });
     
-    if (completedEvents.length === 0) {
+    console.log(`Found ${pendingTickets.length} pending tickets, ${eligibleEvents.length} eligible for manual transfer`);
+    console.log('Eligible event statuses:', eligibleEvents.map(t => ({ eventId: t.eventId._id, status: t.eventId.status, title: t.eventId.title })));
+    
+    if (eligibleEvents.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'No pending transfers found for this organizer. All events must be completed before transfers can be processed.',
-        code: 'NO_PENDING_TRANSFERS'
+        message: 'No eligible transfers found for this organizer. Events must be published or completed for manual transfers.',
+        code: 'NO_ELIGIBLE_TRANSFERS'
       });
     }
     
@@ -804,20 +902,40 @@ const transferToOrganizer = async (req, res) => {
     let totalAmount = 0;
     let successCount = 0;
     let failureCount = 0;
+    let transferedAmount = 0;
     
-    for (const ticket of completedEvents) {
+    for (const ticket of eligibleEvents) {
       try {
-        totalAmount += ticket.organizerPayment;
+        let transferAmount = ticket.organizerPayment;
+        let ticketQuantity = ticket.quantity;
+
+        transferedAmount += transferAmount;
+        
+        // For partially refunded tickets, calculate based on active tickets
+        if (ticket.paymentStatus === 'partially_refunded' && ticket.ticketDetails) {
+          const activeTickets = ticket.ticketDetails.filter(detail => detail.refundStatus !== 'completed');
+          if (activeTickets.length > 0) {
+            const organizerPaymentPerTicket = ticket.organizerPayment / ticket.quantity;
+            transferAmount = activeTickets.length * organizerPaymentPerTicket;
+            ticketQuantity = activeTickets.length;
+          } else {
+            // Skip if no active tickets
+            continue;
+          }
+        }
+        
+        totalAmount += transferAmount;
         
         // Create transfer to organizer
         const transfer = await stripe.transfers.create({
-          amount: Math.round(ticket.organizerPayment * 100), // Convert to cents
+          amount: Math.round(transferAmount * 100), // Convert to cents
           currency: ticket.currency.toLowerCase(),
           destination: organizer.stripeCustomerId,
           metadata: {
             ticketId: ticket._id.toString(),
             eventId: ticket.eventId._id.toString(),
-            organizerId: organizer._id.toString()
+            organizerId: organizer._id.toString(),
+            activeTickets: ticketQuantity.toString()
           }
         });
         
@@ -831,8 +949,8 @@ const transferToOrganizer = async (req, res) => {
           ticketId: ticket._id,
           status: 'completed',
           transferId: transfer.id,
-          amount: ticket.organizerPayment,
-          message: 'Payment sent successfully'
+          amount: transferAmount,
+          message: `Payment sent successfully for ${ticketQuantity} active tickets`
         });
         
         successCount++;
@@ -870,7 +988,7 @@ const transferToOrganizer = async (req, res) => {
           status: 'failed',
           error: errorMessage,
           code: errorCode,
-          amount: ticket.organizerPayment
+          amount: transferedAmount
         });
         
         failureCount++;
@@ -882,7 +1000,7 @@ const transferToOrganizer = async (req, res) => {
     if (successCount > 0 && failureCount === 0) {
       overallMessage = `Payment sent successfully! Transferred CHF ${totalAmount.toFixed(2)} to ${organizer.firstName} ${organizer.lastName}`;
     } else if (successCount > 0 && failureCount > 0) {
-      overallMessage = `Partial success: ${successCount} transfers completed, ${failureCount} failed. Total sent: CHF ${(totalAmount * successCount / completedEvents.length).toFixed(2)}`;
+      overallMessage = `Partial success: ${successCount} transfers completed, ${failureCount} failed. Total sent: CHF ${(totalAmount * successCount / eligibleEvents.length).toFixed(2)}`;
     } else {
       overallMessage = `All transfers failed. Please check the error details below.`;
     }
@@ -891,7 +1009,7 @@ const transferToOrganizer = async (req, res) => {
       success: successCount > 0,
       message: overallMessage,
       data: {
-        totalProcessed: completedEvents.length,
+        totalProcessed: eligibleEvents.length,
         successCount,
         failureCount,
         totalAmount: totalAmount.toFixed(2),

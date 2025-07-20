@@ -63,7 +63,8 @@ class SchedulerService {
     const job = cron.schedule('0 2 * * *', async () => {
       console.log('Running scheduled organizer transfer...');
       try {
-        const results = await transferToOrganizers();
+        // Automated transfer - only completed events
+        const results = await transferToOrganizers(false);
         console.log('Scheduled transfer completed:', results);
       } catch (error) {
         console.error('Scheduled transfer failed:', error);
@@ -79,11 +80,12 @@ class SchedulerService {
 
   /**
    * Run transfer immediately (for testing or manual execution)
+   * @param {boolean} isManualTransfer - If true, transfer for published/completed events. If false, only completed events.
    */
-  async runTransferNow() {
-    console.log('Running transfer immediately...');
+  async runTransferNow(isManualTransfer = false) {
+    console.log(`Running transfer immediately (${isManualTransfer ? 'manual' : 'automated'})...`);
     try {
-      const results = await transferToOrganizers();
+      const results = await transferToOrganizers(isManualTransfer);
       console.log('Immediate transfer completed:', results);
       return results;
     } catch (error) {

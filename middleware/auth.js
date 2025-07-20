@@ -38,13 +38,6 @@ const authenticate = async (req, res, next) => {
     // Attach user to request object
     req.user = user;
     
-    console.log('Auth middleware - User authenticated:', {
-      _id: user._id,
-      email: user.email,
-      role: user.role,
-      isActive: user.isActive
-    });
-    
     next();
   } catch (error) {
     console.error('Auth middleware error:', error);
