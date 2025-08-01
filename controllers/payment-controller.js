@@ -1,6 +1,9 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const Event = require('../models/event');
 const Ticket = require('../models/ticket');
+const User = require('../models/user');
+const emailService = require('../utils/email');
+const { paymentNotifications: paymentNotificationsTemplate } = require('../utils/email-templates');
 
 /**
  * Payment Controller
@@ -153,6 +156,41 @@ const paymentController = {
             
             await Event.findByIdAndUpdate(eventId, updateData);
             
+            // Send successful payment notification email
+            try {
+              const organizer = await User.findById(eventDoc.organizer);
+              if (organizer) {
+                const paymentEmailHtml = paymentNotificationsTemplate.generateSuccessfulPaymentEmail({
+                  userName: organizer.firstName,
+                  eventTitle: eventDoc.title,
+                  amount: session.amount_total / 100, // Convert from cents
+                  currency: session.currency.toUpperCase(),
+                  paymentId: session.id,
+                  eventUrl: `${process.env.FRONTEND_URL}/events/${eventDoc.slug}`
+                });
+                const paymentEmailText = paymentNotificationsTemplate.generateSuccessfulPaymentText({
+                  userName: organizer.firstName,
+                  eventTitle: eventDoc.title,
+                  amount: session.amount_total / 100,
+                  currency: session.currency.toUpperCase(),
+                  paymentId: session.id,
+                  eventUrl: `${process.env.FRONTEND_URL}/events/${eventDoc.slug}`
+                });
+
+                await emailService.sendEmail({
+                  to: organizer.email,
+                  subject: 'Payment Successful - Zafo',
+                  html: paymentEmailHtml,
+                  text: paymentEmailText
+                });
+
+                console.log(`Payment success email sent to ${organizer.email}`);
+              }
+            } catch (emailError) {
+              console.error('Failed to send payment success email:', emailError);
+              // Don't fail payment processing if email fails
+            }
+            
             console.log(`Payment for event ${eventId} completed successfully`);
           } catch (error) {
             console.error('Error updating event payment status:', error);
@@ -182,7 +220,7 @@ const paymentController = {
         }
         break;
         
-      case 'payment_intent.payment_failed':
+              case 'payment_intent.payment_failed':
         const failedPaymentIntent = event.data.object;
         
         // Check if this is a ticket payment
@@ -195,6 +233,43 @@ const paymentController = {
               // Update ticket payment status
               ticket.paymentStatus = 'failed';
               await ticket.save();
+              
+              // Send failed payment notification email
+              try {
+                const attendee = await User.findById(ticket.attendee);
+                const event = await Event.findById(ticket.eventId);
+                
+                if (attendee && event) {
+                  const failedPaymentEmailHtml = paymentNotificationsTemplate.generateFailedPaymentEmail({
+                    userName: attendee.firstName,
+                    eventTitle: event.title,
+                    amount: ticket.ticketPrice,
+                    currency: ticket.currency,
+                    errorMessage: failedPaymentIntent.last_payment_error?.message || 'Payment processing failed',
+                    retryUrl: `${process.env.FRONTEND_URL}/payment/event/${event._id}`
+                  });
+                  const failedPaymentEmailText = paymentNotificationsTemplate.generateFailedPaymentText({
+                    userName: attendee.firstName,
+                    eventTitle: event.title,
+                    amount: ticket.ticketPrice,
+                    currency: ticket.currency,
+                    errorMessage: failedPaymentIntent.last_payment_error?.message || 'Payment processing failed',
+                    retryUrl: `${process.env.FRONTEND_URL}/payment/event/${event._id}`
+                  });
+
+                  await emailService.sendEmail({
+                    to: attendee.email,
+                    subject: 'Payment Failed - Zafo',
+                    html: failedPaymentEmailHtml,
+                    text: failedPaymentEmailText
+                  });
+
+                  console.log(`Payment failure email sent to ${attendee.email}`);
+                }
+              } catch (emailError) {
+                console.error('Failed to send payment failure email:', emailError);
+                // Don't fail payment processing if email fails
+              }
               
               console.log(`Ticket payment failed for ticket ${ticket._id}`);
             }
@@ -248,6 +323,43 @@ const paymentController = {
               }
               
               await ticket.save();
+              
+              // Send refund notification email
+              try {
+                const attendee = await User.findById(ticket.attendee);
+                const event = await Event.findById(ticket.eventId);
+                
+                if (attendee && event) {
+                  const refundEmailHtml = paymentNotificationsTemplate.generateRefundEmail({
+                    userName: attendee.firstName,
+                    eventTitle: event.title,
+                    refundAmount: ticket.refundAmount,
+                    currency: ticket.currency,
+                    refundId: refund.id,
+                    reason: refund.metadata?.reason || 'Refund requested'
+                  });
+                  const refundEmailText = paymentNotificationsTemplate.generateRefundText({
+                    userName: attendee.firstName,
+                    eventTitle: event.title,
+                    refundAmount: ticket.refundAmount,
+                    currency: ticket.currency,
+                    refundId: refund.id,
+                    reason: refund.metadata?.reason || 'Refund requested'
+                  });
+
+                  await emailService.sendEmail({
+                    to: attendee.email,
+                    subject: 'Refund Processed - Zafo',
+                    html: refundEmailHtml,
+                    text: refundEmailText
+                  });
+
+                  console.log(`Refund email sent to ${attendee.email}`);
+                }
+              } catch (emailError) {
+                console.error('Failed to send refund email:', emailError);
+                // Don't fail refund processing if email fails
+              }
               
               console.log(`Ticket refund completed for ticket ${ticket._id}`);
             }

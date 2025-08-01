@@ -1,5 +1,8 @@
 const cron = require('node-cron');
 const transferToOrganizers = require('../scripts/transfer-to-organizers');
+const emailService = require('../utils/email');
+const { adminNotifications: adminNotificationsTemplate } = require('../utils/email-templates');
+const User = require('../models/user');
 
 /**
  * Scheduler Service
@@ -66,6 +69,11 @@ class SchedulerService {
         // Automated transfer - only completed events
         const results = await transferToOrganizers(false);
         console.log('Scheduled transfer completed:', results);
+        
+        // Send automated transfer notifications
+        if (results.organizersWithTransfers) {
+          await this.sendAutomatedTransferNotifications(results.organizersWithTransfers);
+        }
       } catch (error) {
         console.error('Scheduled transfer failed:', error);
       }
@@ -87,10 +95,55 @@ class SchedulerService {
     try {
       const results = await transferToOrganizers(isManualTransfer);
       console.log('Immediate transfer completed:', results);
+      
+      // Send automated transfer notifications if not manual
+      if (!isManualTransfer && results.organizersWithTransfers) {
+        await this.sendAutomatedTransferNotifications(results.organizersWithTransfers);
+      }
+      
       return results;
     } catch (error) {
       console.error('Immediate transfer failed:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Send automated transfer notifications to organizers
+   * @param {Array} organizersWithTransfers - Array of organizers with transfer results
+   */
+  async sendAutomatedTransferNotifications(organizersWithTransfers) {
+    for (const organizerData of organizersWithTransfers) {
+      try {
+        const organizer = await User.findById(organizerData.organizerId);
+        if (!organizer) continue;
+
+        const transferEmailHtml = adminNotificationsTemplate.generateAutomatedTransferEmail({
+          organizerName: `${organizer.firstName} ${organizer.lastName}`,
+          amount: organizerData.totalAmount,
+          currency: 'CHF',
+          successCount: organizerData.successCount,
+          failureCount: organizerData.failureCount
+        });
+        const transferEmailText = adminNotificationsTemplate.generateAutomatedTransferText({
+          organizerName: `${organizer.firstName} ${organizer.lastName}`,
+          amount: organizerData.totalAmount,
+          currency: 'CHF',
+          successCount: organizerData.successCount,
+          failureCount: organizerData.failureCount
+        });
+
+        await emailService.sendEmail({
+          to: organizer.email,
+          subject: 'Automated Payment Transfer - Zafo',
+          html: transferEmailHtml,
+          text: transferEmailText
+        });
+
+        console.log(`Automated transfer notification sent to ${organizer.email}`);
+      } catch (emailError) {
+        console.error(`Failed to send automated transfer notification to organizer ${organizerData.organizerId}:`, emailError);
+      }
     }
   }
 

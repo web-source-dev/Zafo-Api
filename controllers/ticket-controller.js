@@ -2,6 +2,8 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const Ticket = require('../models/ticket');
 const Event = require('../models/event');
 const User = require('../models/user');
+const emailService = require('../utils/email');
+const { userNotifications: userNotificationsTemplate } = require('../utils/email-templates');
 
 /**
  * Ticket Controller
@@ -422,6 +424,49 @@ const ticketController = {
         ticket.paymentStatus = 'paid';
         await ticket.save();
         
+        // Send ticket purchase confirmation email
+        try {
+          const attendee = await User.findById(ticket.attendee);
+          const event = await Event.findById(ticket.eventId);
+          
+          if (attendee && event) {
+            const ticketPurchaseEmailHtml = userNotificationsTemplate.generateTicketPurchaseEmail({
+              userName: attendee.firstName,
+              eventTitle: event.title,
+              eventDate: event.startDate,
+              eventLocation: event.location.name,
+              quantity: ticket.quantity,
+              totalAmount: ticket.ticketPrice,
+              currency: ticket.currency,
+              ticketDetails: ticket.ticketDetails,
+              eventUrl: `${process.env.FRONTEND_URL}/events/${event.slug}`
+            });
+            const ticketPurchaseEmailText = userNotificationsTemplate.generateTicketPurchaseText({
+              userName: attendee.firstName,
+              eventTitle: event.title,
+              eventDate: event.startDate,
+              eventLocation: event.location.name,
+              quantity: ticket.quantity,
+              totalAmount: ticket.ticketPrice,
+              currency: ticket.currency,
+              ticketDetails: ticket.ticketDetails,
+              eventUrl: `${process.env.FRONTEND_URL}/events/${event.slug}`
+            });
+
+            await emailService.sendEmail({
+              to: attendee.email,
+              subject: 'Ticket Purchase Confirmation - Zafo',
+              html: ticketPurchaseEmailHtml,
+              text: ticketPurchaseEmailText
+            });
+
+            console.log(`Ticket purchase confirmation email sent to ${attendee.email}`);
+          }
+        } catch (emailError) {
+          console.error('Failed to send ticket purchase confirmation email:', emailError);
+          // Don't fail payment confirmation if email fails
+        }
+        
         res.status(200).json({
           success: true,
           message: 'Ticket payment confirmed',
@@ -575,6 +620,54 @@ const ticketController = {
       }
       
       await ticket.save();
+      
+      // Send refund request confirmation email
+      try {
+        const attendee = await User.findById(ticket.attendee);
+        
+        if (attendee) {
+          const refundRequestEmailHtml = userNotificationsTemplate.generateRefundRequestEmail({
+            userName: attendee.firstName,
+            eventTitle: ticket.eventId.title,
+            eventDate: ticket.eventId.startDate,
+            quantity: ticketsToRefund.length,
+            refundAmount: refundAmount,
+            currency: ticket.currency,
+            reason: reason.trim(),
+            refundedTickets: ticketsToRefund.map(t => ({
+              ticketNumber: t.ticketNumber,
+              attendeeName: t.attendeeName,
+              attendeeEmail: t.attendeeEmail
+            }))
+          });
+          const refundRequestEmailText = userNotificationsTemplate.generateRefundRequestText({
+            userName: attendee.firstName,
+            eventTitle: ticket.eventId.title,
+            eventDate: ticket.eventId.startDate,
+            quantity: ticketsToRefund.length,
+            refundAmount: refundAmount,
+            currency: ticket.currency,
+            reason: reason.trim(),
+            refundedTickets: ticketsToRefund.map(t => ({
+              ticketNumber: t.ticketNumber,
+              attendeeName: t.attendeeName,
+              attendeeEmail: t.attendeeEmail
+            }))
+          });
+
+          await emailService.sendEmail({
+            to: attendee.email,
+            subject: 'Refund Request Submitted - Zafo',
+            html: refundRequestEmailHtml,
+            text: refundRequestEmailText
+          });
+
+          console.log(`Refund request confirmation email sent to ${attendee.email}`);
+        }
+      } catch (emailError) {
+        console.error('Failed to send refund request confirmation email:', emailError);
+        // Don't fail refund request if email fails
+      }
       
       res.status(200).json({
         success: true,

@@ -1,5 +1,8 @@
 const User = require('../models/user');
 const { generateToken } = require('../utils/token');
+const crypto = require('crypto');
+const emailService = require('../utils/email');
+const { forgotPassword: forgotPasswordTemplate, welcome: welcomeTemplate } = require('../utils/email-templates');
 
 /**
  * @desc    Register a new user
@@ -29,6 +32,29 @@ const register = async (req, res) => {
 
     // Generate JWT token
     const token = generateToken({ id: user._id });
+
+    // Send welcome email
+    try {
+      const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`;
+      const welcomeEmailHtml = welcomeTemplate.generateWelcomeEmail({
+        userName: user.firstName,
+        loginUrl
+      });
+      const welcomeEmailText = welcomeTemplate.generateWelcomeText({
+        userName: user.firstName,
+        loginUrl
+      });
+
+      await emailService.sendEmail({
+        to: user.email,
+        subject: 'Welcome to Zafo!',
+        html: welcomeEmailHtml,
+        text: welcomeEmailText
+      });
+    } catch (emailError) {
+      console.error('Failed to send welcome email:', emailError);
+      // Don't fail registration if email fails
+    }
 
     // User data to return (omit password)
     const userToReturn = {
@@ -320,11 +346,140 @@ const deleteAccount = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Forgot password - send reset email
+ * @route   POST /api/auth/forgot-password
+ * @access  Public
+ */
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    // Find user by email
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'No user found with this email address'
+      });
+    }
+
+    // Generate reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenExpiry = Date.now() + 3600000; // 1 hour
+
+    // Save reset token to user
+    user.resetPasswordToken = resetToken;
+    user.resetPasswordExpires = resetTokenExpiry;
+    await user.save();
+
+    // Create reset URL
+    const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}`;
+
+    // Generate email content using template
+    const forgotPasswordEmailHtml = forgotPasswordTemplate.generateForgotPasswordEmail({
+      userName: user.firstName,
+      resetUrl,
+      expiryTime: '1 hour'
+    });
+    const forgotPasswordEmailText = forgotPasswordTemplate.generateForgotPasswordText({
+      userName: user.firstName,
+      resetUrl,
+      expiryTime: '1 hour'
+    });
+
+    // Send email using email service
+    await emailService.sendEmail({
+      to: email,
+      subject: 'Password Reset Request - Zafo',
+      html: forgotPasswordEmailHtml,
+      text: forgotPasswordEmailText
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset email sent successfully'
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send password reset email. Please try again later.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * @desc    Reset password with token
+ * @route   POST /api/auth/reset-password
+ * @access  Public
+ */
+const resetPassword = async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token and new password are required'
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be at least 6 characters long'
+      });
+    }
+
+    // Find user with reset token
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: Date.now() }
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired reset token'
+      });
+    }
+
+    // Update password and clear reset token
+    user.password = newPassword;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset successfully'
+    });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Password reset failed. Please try again later.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = {
   register,
   login,
   getCurrentUser,
   updateProfile,
   changePassword,
-  deleteAccount
+  deleteAccount,
+  forgotPassword,
+  resetPassword
 };

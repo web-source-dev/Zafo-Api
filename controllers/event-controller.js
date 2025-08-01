@@ -1,5 +1,8 @@
 const Event = require('../models/event');
 const mongoose = require('mongoose');
+const User = require('../models/user');
+const emailService = require('../utils/email');
+const { userNotifications: userNotificationsTemplate } = require('../utils/email-templates');
 
 /**
  * Creates a slug from a title string
@@ -50,6 +53,40 @@ const eventController = {
       const event = new Event(eventData);
       await event.save();
       
+      // Send event creation confirmation email
+      try {
+        const organizer = await User.findById(req.user._id);
+        
+        if (organizer) {
+          const eventCreationEmailHtml = userNotificationsTemplate.generateEventCreationEmail({
+            organizerName: organizer.firstName,
+            eventTitle: event.title,
+            eventDate: event.startDate,
+            eventUrl: `${process.env.FRONTEND_URL}/organizer/events/${event._id}`,
+            paymentUrl: event.price.isFree ? null : `${process.env.FRONTEND_URL}/payment/create/${event._id}`
+          });
+          const eventCreationEmailText = userNotificationsTemplate.generateEventCreationText({
+            organizerName: organizer.firstName,
+            eventTitle: event.title,
+            eventDate: event.startDate,
+            eventUrl: `${process.env.FRONTEND_URL}/organizer/events/${event._id}`,
+            paymentUrl: event.price.isFree ? null : `${process.env.FRONTEND_URL}/payment/create/${event._id}`
+          });
+
+          await emailService.sendEmail({
+            to: organizer.email,
+            subject: 'Event Created Successfully - Zafo',
+            html: eventCreationEmailHtml,
+            text: eventCreationEmailText
+          });
+
+          console.log(`Event creation confirmation email sent to ${organizer.email}`);
+        }
+      } catch (emailError) {
+        console.error('Failed to send event creation confirmation email:', emailError);
+        // Don't fail event creation if email fails
+      }
+      
       console.log('Event created successfully with organizer:', event.organizer);
       
       res.status(201).json({
@@ -91,6 +128,9 @@ const eventController = {
         startDate, 
         endDate, 
         isPublic,
+        search,
+        priceRange,
+        location,
         sort = '-createdAt', // Default sort by newest
         limit = 10, 
         page = 1
@@ -125,6 +165,61 @@ const eventController = {
         filter.isPublic = isPublic === 'true';
       }
       
+      // Filter by search term (title, description, or tags)
+      if (search) {
+        const searchConditions = [
+          { title: { $regex: search, $options: 'i' } },
+          { smallDescription: { $regex: search, $options: 'i' } },
+          { aboutEvent: { $regex: search, $options: 'i' } },
+          { tags: { $in: [new RegExp(search, 'i')] } }
+        ];
+        
+        if (filter.$or) {
+          // If location filter already exists, combine with AND logic
+          filter.$and = [
+            { $or: filter.$or },
+            { $or: searchConditions }
+          ];
+          delete filter.$or;
+        } else {
+          filter.$or = searchConditions;
+        }
+      }
+      
+      // Filter by price range
+      if (priceRange) {
+        if (priceRange === 'free') {
+          filter['price.isFree'] = true;
+        } else if (priceRange.includes('-')) {
+          const [min, max] = priceRange.split('-').map(Number);
+          filter['price.amount'] = { $gte: min, $lte: max };
+          filter['price.isFree'] = false;
+        } else if (priceRange === '200+') {
+          filter['price.amount'] = { $gte: 200 };
+          filter['price.isFree'] = false;
+        }
+      }
+      
+      // Filter by location
+      if (location) {
+        const locationConditions = [
+          { 'location.name': { $regex: location, $options: 'i' } },
+          { 'location.address.city': { $regex: location, $options: 'i' } },
+          { 'location.address.country': { $regex: location, $options: 'i' } }
+        ];
+        
+        if (filter.$or) {
+          // If search filter already exists, combine with AND logic
+          filter.$and = [
+            { $or: filter.$or },
+            { $or: locationConditions }
+          ];
+          delete filter.$or;
+        } else {
+          filter.$or = locationConditions;
+        }
+      }
+      
       // If not admin/organizer, only return published events
       if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'organizer')) {
         filter.status = 'published';
@@ -133,6 +228,8 @@ const eventController = {
       
       // Calculate pagination
       const skip = (page - 1) * limit;
+      
+      console.log('Event filter:', JSON.stringify(filter, null, 2));
       
       // Execute query with pagination and sorting
       const events = await Event.find(filter)

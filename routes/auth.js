@@ -6,7 +6,9 @@ const {
   getCurrentUser, 
   updateProfile,
   changePassword,
-  deleteAccount
+  deleteAccount,
+  forgotPassword,
+  resetPassword
 } = require('../controllers/auth-controller');
 const { authenticate } = require('../middleware/auth');
 
@@ -51,6 +53,20 @@ router.post('/change-password', authenticate, changePassword);
  * @access  Private (requires authentication)
  */
 router.delete('/delete-account', authenticate, deleteAccount);
+
+/**
+ * @desc    Forgot password - send reset email
+ * @route   POST /api/auth/forgot-password
+ * @access  Public
+ */
+router.post('/forgot-password', forgotPassword);
+
+/**
+ * @desc    Reset password with token
+ * @route   POST /api/auth/reset-password
+ * @access  Public
+ */
+router.post('/reset-password', resetPassword);
 
 /**
  * @desc    Verify token (useful for frontend to check token validity)

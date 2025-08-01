@@ -1,6 +1,8 @@
 const User = require('../models/user');
 const mongoose = require('mongoose');
 const schedulerService = require('../services/scheduler-service');
+const emailService = require('../utils/email');
+const { adminNotifications: adminNotificationsTemplate } = require('../utils/email-templates');
 
 /**
  * @desc    Get admin dashboard stats
@@ -290,6 +292,30 @@ const deleteUser = async (req, res) => {
       });
     }
     
+    // Send deletion notification email
+    try {
+      const deletionEmailHtml = adminNotificationsTemplate.generateUserDeletionEmail({
+        userName: user.firstName,
+        adminName: `${req.user.firstName} ${req.user.lastName}`,
+        reason: req.body.reason || null
+      });
+      const deletionEmailText = adminNotificationsTemplate.generateUserDeletionText({
+        userName: user.firstName,
+        adminName: `${req.user.firstName} ${req.user.lastName}`,
+        reason: req.body.reason || null
+      });
+
+      await emailService.sendEmail({
+        to: user.email,
+        subject: 'Account Deletion Notice - Zafo',
+        html: deletionEmailHtml,
+        text: deletionEmailText
+      });
+    } catch (emailError) {
+      console.error('Failed to send deletion notification email:', emailError);
+      // Don't fail deletion if email fails
+    }
+
     await user.remove();
     
     res.status(200).json({
@@ -333,6 +359,30 @@ const changeUserPassword = async (req, res) => {
     
     user.password = password;
     await user.save();
+    
+    // Send password change notification email
+    try {
+      const passwordChangeEmailHtml = adminNotificationsTemplate.generatePasswordChangeEmail({
+        userName: user.firstName,
+        adminName: `${req.user.firstName} ${req.user.lastName}`,
+        newPassword: password // Include the new password for admin-set passwords
+      });
+      const passwordChangeEmailText = adminNotificationsTemplate.generatePasswordChangeText({
+        userName: user.firstName,
+        adminName: `${req.user.firstName} ${req.user.lastName}`,
+        newPassword: password
+      });
+
+      await emailService.sendEmail({
+        to: user.email,
+        subject: 'Password Changed - Zafo',
+        html: passwordChangeEmailHtml,
+        text: passwordChangeEmailText
+      });
+    } catch (emailError) {
+      console.error('Failed to send password change notification email:', emailError);
+      // Don't fail password change if email fails
+    }
     
     res.status(200).json({
       success: true,
@@ -1005,6 +1055,39 @@ const transferToOrganizer = async (req, res) => {
       overallMessage = `All transfers failed. Please check the error details below.`;
     }
     
+    // Send transfer notification email to organizer
+    if (successCount > 0 || failureCount > 0) {
+      try {
+        const transferEmailHtml = adminNotificationsTemplate.generateManualTransferEmail({
+          organizerName: `${organizer.firstName} ${organizer.lastName}`,
+          adminName: `${req.user.firstName} ${req.user.lastName}`,
+          amount: totalAmount,
+          currency: 'CHF',
+          successCount,
+          failureCount,
+          results: transferResults
+        });
+        const transferEmailText = adminNotificationsTemplate.generateManualTransferText({
+          organizerName: `${organizer.firstName} ${organizer.lastName}`,
+          adminName: `${req.user.firstName} ${req.user.lastName}`,
+          amount: totalAmount,
+          currency: 'CHF',
+          successCount,
+          failureCount
+        });
+
+        await emailService.sendEmail({
+          to: organizer.email,
+          subject: 'Manual Payment Transfer - Zafo',
+          html: transferEmailHtml,
+          text: transferEmailText
+        });
+      } catch (emailError) {
+        console.error('Failed to send transfer notification email:', emailError);
+        // Don't fail transfer if email fails
+      }
+    }
+
     res.status(200).json({
       success: successCount > 0,
       message: overallMessage,
