@@ -49,6 +49,15 @@ const eventController = {
         eventData.slug = createSlugFromTitle(eventData.title);
       }
       
+      // Auto-generate SEO data from form fields
+      if (!eventData.seo) {
+        eventData.seo = {
+          metaTitle: eventData.title,
+          metaDescription: eventData.smallDescription,
+          ogImage: eventData.coverImage
+        };
+      }
+      
       // Create new event
       const event = new Event(eventData);
       await event.save();
@@ -439,6 +448,15 @@ const eventController = {
       // Update slug if title is updated
       if (updates.title && !updates.slug) {
         updates.slug = createSlugFromTitle(updates.title);
+      }
+      
+      // Auto-update SEO data when title, description, or cover image changes
+      if (updates.title || updates.smallDescription || updates.coverImage) {
+        updates.seo = {
+          metaTitle: updates.title || event.title,
+          metaDescription: updates.smallDescription || event.smallDescription,
+          ogImage: updates.coverImage || event.coverImage
+        };
       }
       
       // Preserve payment status and prevent reverting to pending_payment
