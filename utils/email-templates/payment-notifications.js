@@ -66,12 +66,12 @@ const generateSuccessfulPaymentEmail = (data) => {
           color: #666;
         }
         .success-box {
-          background-color: #d4edda;
-          border: 1px solid #c3e6cb;
+          background-color: #d7efff;
+          border: 1px solid #4a95eb;
           border-radius: 6px;
           padding: 20px;
           margin: 20px 0;
-          color: #155724;
+          color: #1390b6;
         }
         .payment-details {
           background-color: #f8f9fa;
@@ -80,7 +80,7 @@ const generateSuccessfulPaymentEmail = (data) => {
           margin: 20px 0;
         }
         .payment-details h3 {
-          color: #537e5f;
+          color: #4a95eb;
           margin-top: 0;
           margin-bottom: 15px;
         }
@@ -106,7 +106,7 @@ const generateSuccessfulPaymentEmail = (data) => {
         }
         .view-event-button {
           display: inline-block;
-          background: linear-gradient(135deg, #537e5f 0%, #424b3c 100%);
+          background: linear-gradient(135deg, #4a95eb 0%, #1390b6 100%);
           color: white;
           padding: 15px 30px;
           text-decoration: none;
@@ -313,7 +313,7 @@ const generateFailedPaymentEmail = (data) => {
           margin: 20px 0;
         }
         .payment-details h3 {
-          color: #537e5f;
+          color: #4a95eb;
           margin-top: 0;
           margin-bottom: 15px;
         }
@@ -339,7 +339,7 @@ const generateFailedPaymentEmail = (data) => {
         }
         .retry-button {
           display: inline-block;
-          background: linear-gradient(135deg, #537e5f 0%, #424b3c 100%);
+          background: linear-gradient(135deg, #4a95eb 0%, #1390b6 100%);
           color: white;
           padding: 15px 30px;
           text-decoration: none;
@@ -547,7 +547,7 @@ const generateRefundEmail = (data) => {
           margin: 20px 0;
         }
         .refund-details h3 {
-          color: #537e5f;
+          color: #4a95eb;
           margin-top: 0;
           margin-bottom: 15px;
         }

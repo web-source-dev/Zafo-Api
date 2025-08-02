@@ -38,7 +38,7 @@ const generateWelcomeEmail = (data) => {
           box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
         .header {
-          background: linear-gradient(135deg, #537e5f 0%, #424b3c 100%);
+          background: linear-gradient(135deg, #4a95eb 0%, #1390b6 100%);
           color: white;
           padding: 40px 20px;
           text-align: center;
@@ -69,7 +69,7 @@ const generateWelcomeEmail = (data) => {
           margin: 30px 0;
         }
         .features h3 {
-          color: #537e5f;
+          color: #4a95eb;
           margin-top: 0;
           margin-bottom: 15px;
         }
@@ -86,7 +86,7 @@ const generateWelcomeEmail = (data) => {
         }
         .feature-list li:before {
           content: "✓";
-          color: #537e5f;
+          color: #4a95eb;
           font-weight: bold;
           position: absolute;
           left: 0;
@@ -97,7 +97,7 @@ const generateWelcomeEmail = (data) => {
         }
         .login-button {
           display: inline-block;
-          background: linear-gradient(135deg, #537e5f 0%, #424b3c 100%);
+          background: linear-gradient(135deg, #4a95eb 0%, #1390b6 100%);
           color: white;
           padding: 15px 30px;
           text-decoration: none;
@@ -128,12 +128,12 @@ const generateWelcomeEmail = (data) => {
           margin-bottom: 10px;
         }
         .highlight {
-          background-color: #e8f5e8;
-          border: 1px solid #c3e6c3;
+          background-color: #d7efff;
+          border: 1px solid #4a95eb;
           border-radius: 6px;
           padding: 15px;
           margin: 20px 0;
-          color: #2d5a2d;
+          color: #1390b6;
         }
         @media only screen and (max-width: 600px) {
           .container {

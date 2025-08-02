@@ -39,7 +39,7 @@ const generateUserDeletionEmail = (data) => {
           box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
         .header {
-          background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+          background: linear-gradient(135deg, #4a95eb 0%, #1390b6 100%);
           color: white;
           padding: 30px 20px;
           text-align: center;
@@ -200,7 +200,7 @@ const generatePasswordChangeEmail = (data) => {
           box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
         .header {
-          background: linear-gradient(135deg, #537e5f 0%, #424b3c 100%);
+          background: linear-gradient(135deg, #4a95eb 0%, #1390b6 100%);
           color: white;
           padding: 30px 20px;
           text-align: center;
@@ -224,12 +224,12 @@ const generatePasswordChangeEmail = (data) => {
           color: #666;
         }
         .info-box {
-          background-color: #e8f5e8;
-          border: 1px solid #c3e6c3;
+          background-color: #d7efff;
+          border: 1px solid #4a95eb;
           border-radius: 6px;
           padding: 20px;
           margin: 20px 0;
-          color: #2d5a2d;
+          color: #1390b6;
         }
         .warning {
           background-color: #fff3cd;
@@ -380,7 +380,7 @@ const generateManualTransferEmail = (data) => {
           box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
         .header {
-          background: linear-gradient(135deg, #537e5f 0%, #424b3c 100%);
+          background: linear-gradient(135deg, #4a95eb 0%, #1390b6 100%);
           color: white;
           padding: 30px 20px;
           text-align: center;
@@ -404,12 +404,12 @@ const generateManualTransferEmail = (data) => {
           color: #666;
         }
         .success-box {
-          background-color: #d4edda;
-          border: 1px solid #c3e6cb;
+          background-color: #d7efff;
+          border: 1px solid #4a95eb;
           border-radius: 6px;
           padding: 20px;
           margin: 20px 0;
-          color: #155724;
+          color: #1390b6;
         }
         .warning-box {
           background-color: #fff3cd;
@@ -450,7 +450,7 @@ const generateManualTransferEmail = (data) => {
           margin: 20px 0;
         }
         .stats h3 {
-          color: #537e5f;
+          color: #4a95eb;
           margin-top: 0;
           margin-bottom: 15px;
         }
@@ -469,7 +469,7 @@ const generateManualTransferEmail = (data) => {
         .stat-value {
           font-size: 24px;
           font-weight: bold;
-          color: #537e5f;
+          color: #4a95eb;
         }
         .stat-label {
           font-size: 12px;
@@ -609,7 +609,7 @@ const generateAutomatedTransferEmail = (data) => {
           box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
         .header {
-          background: linear-gradient(135deg, #537e5f 0%, #424b3c 100%);
+          background: linear-gradient(135deg, #4a95eb 0%, #1390b6 100%);
           color: white;
           padding: 30px 20px;
           text-align: center;
@@ -633,12 +633,12 @@ const generateAutomatedTransferEmail = (data) => {
           color: #666;
         }
         .success-box {
-          background-color: #d4edda;
-          border: 1px solid #c3e6cb;
+          background-color: #d7efff;
+          border: 1px solid #4a95eb;
           border-radius: 6px;
           padding: 20px;
           margin: 20px 0;
-          color: #155724;
+          color: #1390b6;
         }
         .warning-box {
           background-color: #fff3cd;
@@ -679,7 +679,7 @@ const generateAutomatedTransferEmail = (data) => {
           margin: 20px 0;
         }
         .stats h3 {
-          color: #537e5f;
+          color: #4a95eb;
           margin-top: 0;
           margin-bottom: 15px;
         }
@@ -698,7 +698,7 @@ const generateAutomatedTransferEmail = (data) => {
         .stat-value {
           font-size: 24px;
           font-weight: bold;
-          color: #537e5f;
+          color: #4a95eb;
         }
         .stat-label {
           font-size: 12px;

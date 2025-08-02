@@ -39,7 +39,7 @@ const generateEmailVerificationEmail = (data) => {
           box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
         .header {
-          background: linear-gradient(135deg, #537e5f 0%, #424b3c 100%);
+          background: linear-gradient(135deg, #4a95eb 0%, #1390b6 100%);
           color: white;
           padding: 30px 20px;
           text-align: center;
@@ -68,7 +68,7 @@ const generateEmailVerificationEmail = (data) => {
         }
         .verify-button {
           display: inline-block;
-          background: linear-gradient(135deg, #537e5f 0%, #424b3c 100%);
+          background: linear-gradient(135deg, #4a95eb 0%, #1390b6 100%);
           color: white;
           padding: 15px 30px;
           text-decoration: none;
@@ -121,7 +121,7 @@ const generateEmailVerificationEmail = (data) => {
           margin: 20px 0;
         }
         .benefits h3 {
-          color: #537e5f;
+          color: #4a95eb;
           margin-top: 0;
           margin-bottom: 15px;
         }
@@ -193,7 +193,7 @@ const generateEmailVerificationEmail = (data) => {
           <div class="message">
             If the button above doesn't work, you can copy and paste this link into your browser:
             <br><br>
-            <a href="${verificationUrl}" style="color: #537e5f; word-break: break-all;">${verificationUrl}</a>
+            <a href="${verificationUrl}" style="color: #4a95eb; word-break: break-all;">${verificationUrl}</a>
           </div>
         </div>
         
